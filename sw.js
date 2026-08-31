@@ -1,10 +1,10 @@
-const CACHE_NAME = "cycle-journal-v4";
+const CACHE_NAME = "cycle-journal-v5";
 const ASSETS = [
   "./",
   "index.html",
-  "styles.css?v=4",
-  "app.js?v=4",
-  "vendor/lucide.min.js?v=4",
+  "styles.css?v=5",
+  "app.js?v=5",
+  "vendor/lucide.min.js?v=5",
   "vendor/LUCIDE-LICENSE",
   "manifest.webmanifest",
   "icons/icon-192.png",
@@ -45,4 +45,13 @@ self.addEventListener("fetch", event => {
     return;
   }
   event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request)));
+});
+
+self.addEventListener("notificationclick", event => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (windows.length) return windows[0].focus();
+    return self.clients.openWindow("./");
+  })());
 });

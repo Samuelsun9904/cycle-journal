@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=4">
+  <link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
   <div class="app-shell">
@@ -54,6 +54,10 @@
         <div class="quick-actions">
           <button class="primary-button quick-primary" id="logTodayButton" type="button"><i data-lucide="plus"></i>记录今天</button>
           <button class="secondary-button" id="logPeriodRangeButton" type="button"><i data-lucide="calendar-range"></i>记录一段经期</button>
+        </div>
+        <div class="today-guidance" id="todayGuidance">
+          <i data-lucide="sparkles" aria-hidden="true"></i>
+          <div><strong id="guidanceTitle">建立你的周期基线</strong><p id="guidanceCopy">持续记录经量、感受和疼痛，变化会出现在分析页。</p></div>
         </div>
         <div class="today-details">
           <div class="section-row"><h2>今日记录</h2><button class="inline-button" id="editTodayButton" type="button">编辑</button></div>
@@ -114,7 +118,7 @@
           <div class="symptom-summary" id="symptomSummary"></div>
         </div>
         <div class="change-section">
-          <h3>本周期变化</h3>
+          <div class="section-row"><h3>周期变化</h3><span id="changePeriodLabel">近期与此前</span></div>
           <div class="change-summary" id="changeSummary"></div>
         </div>
         <div class="flow-section">
@@ -129,8 +133,17 @@
 
       <section class="view" id="settingsView" aria-labelledby="settingsTab">
         <div class="section-heading">
-          <p class="eyebrow">仅保存在当前设备</p>
-          <h2>数据管理</h2>
+          <p class="eyebrow">提醒只在当前设备生效</p>
+          <h2>提醒与数据</h2>
+        </div>
+        <div class="reminder-panel">
+          <div class="reminder-heading"><span class="setting-icon"><i data-lucide="bell-ring"></i></span><div><strong>预计经期提醒</strong><small id="reminderStatus">尚未开启</small></div><input id="reminderEnabled" type="checkbox" role="switch" aria-label="开启预计经期提醒"></div>
+          <div class="reminder-controls" id="reminderControls" hidden>
+            <label>提前提醒<select id="reminderDays"><option value="0">预计当天</option><option value="1">提前 1 天</option><option value="2">提前 2 天</option><option value="3">提前 3 天</option></select></label>
+            <label>提醒时间<input id="reminderTime" type="time" value="09:00"></label>
+            <button class="secondary-button" id="testReminderButton" type="button"><i data-lucide="send"></i>测试通知</button>
+          </div>
+          <p class="reminder-note">网页关闭后，系统日历提醒更可靠；导出的预计日期会自动带提醒。</p>
         </div>
         <div class="settings-list">
           <button class="settings-row" id="exportButton" type="button">
@@ -141,7 +154,7 @@
           </label>
           <input id="importInput" type="file" accept="application/json,.json" hidden>
           <button class="settings-row" id="calendarExportButton" type="button">
-            <i data-lucide="calendar-plus" aria-hidden="true"></i><span><strong>添加预计日期到日历</strong><small>导出系统日历事件，不上传数据</small></span><i data-lucide="chevron-right" aria-hidden="true"></i>
+            <i data-lucide="calendar-plus" aria-hidden="true"></i><span><strong>添加预计日期到日历</strong><small>包含提醒，网页关闭后也能收到</small></span><i data-lucide="chevron-right" aria-hidden="true"></i>
           </button>
           <button class="settings-row danger-row" id="clearButton" type="button">
             <i data-lucide="trash-2" aria-hidden="true"></i><span><strong>清除全部数据</strong><small>此操作无法撤销</small></span><i data-lucide="chevron-right" aria-hidden="true"></i>
@@ -189,11 +202,17 @@
 
       <fieldset id="flowFieldset">
         <legend>流量</legend>
-        <div class="state-options flow-options">
+        <div class="state-options four-state flow-options">
           <label><input type="radio" name="flow" value="light"><span><i data-lucide="droplet"></i>少</span></label>
           <label><input type="radio" name="flow" value="medium"><span><i data-lucide="droplets"></i>中</span></label>
           <label><input type="radio" name="flow" value="heavy"><span><i data-lucide="waves"></i>多</span></label>
+          <label><input type="radio" name="flow" value="veryHeavy"><span><i data-lucide="cloud-rain"></i>超多</span></label>
         </div>
+      </fieldset>
+
+      <fieldset class="pain-location-state">
+        <legend>疼痛部位 <small>可多选</small></legend>
+        <div class="pain-location-grid" id="painTypeOptions"></div>
       </fieldset>
 
       <fieldset class="body-state energy-state">
@@ -270,10 +289,11 @@
       </div>
       <fieldset>
         <legend>默认流量</legend>
-        <div class="segmented three">
+        <div class="segmented four">
           <label><input type="radio" name="rangeFlow" value="light"><span>少</span></label>
           <label><input type="radio" name="rangeFlow" value="medium" checked><span>中</span></label>
           <label><input type="radio" name="rangeFlow" value="heavy"><span>多</span></label>
+          <label><input type="radio" name="rangeFlow" value="veryHeavy"><span>超多</span></label>
         </div>
       </fieldset>
       <p class="form-note">保存后仍可逐日调整流量，其他日期记录不会被覆盖。</p>
@@ -310,7 +330,7 @@
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="vendor/lucide.min.js?v=4"></script>
-  <script src="app.js?v=4"></script>
+  <script src="vendor/lucide.min.js?v=5"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>

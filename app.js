@@ -1,13 +1,18 @@
 const STORAGE_KEY = "cycle-journal-v1";
 const BACKUP_ITERATIONS = 250000;
 const SYMPTOMS = [
-  { id: "cramps", label: "腹痛" }, { id: "headache", label: "头痛" },
-  { id: "backache", label: "腰痛" }, { id: "breast", label: "乳房胀痛" },
   { id: "bloating", label: "腹胀" }, { id: "acne", label: "痘痘" },
   { id: "tired", label: "疲惫" }, { id: "lowMood", label: "情绪低落" },
   { id: "irritable", label: "烦躁" }, { id: "poorSleep", label: "睡眠不佳" },
   { id: "appetite", label: "食欲变化" }, { id: "discharge", label: "分泌物变化" }
 ];
+const PAIN_TYPES = [
+  { id: "cramps", label: "腹部绞痛", icon: "circle-gauge" }, { id: "ovulation", label: "排卵痛", icon: "scan-line" },
+  { id: "breast", label: "乳房胀痛", icon: "heart-pulse" }, { id: "headache", label: "头痛", icon: "brain" },
+  { id: "backache", label: "腰背痛", icon: "accessibility" }, { id: "joint", label: "关节酸痛", icon: "bone" }
+];
+const LEGACY_PAIN_IDS = new Set(["cramps", "headache", "backache", "breast"]);
+const DEFAULT_SETTINGS = { lastBackupAt: null, reminderEnabled: false, reminderDays: 1, reminderTime: "09:00", lastReminderKey: null };
 
 const stored = loadStore();
 const state = {
@@ -37,6 +42,10 @@ const elements = {
   deletePeriodRange: document.querySelector("#deletePeriodRange"), backupDialog: document.querySelector("#backupDialog"),
   backupPassword: document.querySelector("#backupPassword"), backupPasswordConfirm: document.querySelector("#backupPasswordConfirm"),
   backupError: document.querySelector("#backupError"), recordWeekStrip: document.querySelector("#recordWeekStrip"),
+  painTypeOptions: document.querySelector("#painTypeOptions"), guidanceTitle: document.querySelector("#guidanceTitle"),
+  guidanceCopy: document.querySelector("#guidanceCopy"), reminderEnabled: document.querySelector("#reminderEnabled"),
+  reminderControls: document.querySelector("#reminderControls"), reminderDays: document.querySelector("#reminderDays"),
+  reminderTime: document.querySelector("#reminderTime"), reminderStatus: document.querySelector("#reminderStatus"),
   regularityArc: document.querySelector("#regularityArc"), regularityValue: document.querySelector("#regularityValue"),
   analysisVerdict: document.querySelector("#analysisVerdict"), analysisCopy: document.querySelector("#analysisCopy"),
   changeSummary: document.querySelector("#changeSummary"), flowHistory: document.querySelector("#flowHistory"),
@@ -49,7 +58,7 @@ function initialize() {
   document.querySelector("#todayLabel").textContent = new Intl.DateTimeFormat("zh-CN", {
     month: "long", day: "numeric", weekday: "long"
   }).format(new Date());
-  renderSymptomOptions();
+  renderSymptomOptions(); renderPainTypeOptions();
   bindEvents();
   render();
   refreshIcons();
@@ -57,6 +66,8 @@ function initialize() {
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }));
   }
+  window.addEventListener("load", checkPredictionReminder);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) checkPredictionReminder(); });
 }
 
 function bindEvents() {
@@ -72,6 +83,7 @@ function bindEvents() {
     renderCalendar();
   }));
   document.querySelectorAll('input[name="period"]').forEach(input => input.addEventListener("change", updateFormVisibility));
+  document.querySelectorAll('input[name="pain"]').forEach(input => input.addEventListener("change", syncPainSelection));
   elements.hadSex.addEventListener("change", updateFormVisibility);
   document.querySelector("#saveRecord").addEventListener("click", saveCurrentRecord);
   elements.deleteRecord.addEventListener("click", deleteCurrentRecord);
@@ -87,12 +99,16 @@ function bindEvents() {
   document.querySelector("#confirmBackupAction").addEventListener("click", runBackupAction);
   document.querySelector("#importInput").addEventListener("change", importData);
   document.querySelector("#calendarExportButton").addEventListener("click", exportPredictionCalendar);
+  elements.reminderEnabled.addEventListener("change", handleReminderToggle);
+  elements.reminderDays.addEventListener("change", saveReminderSettings);
+  elements.reminderTime.addEventListener("change", saveReminderSettings);
+  document.querySelector("#testReminderButton").addEventListener("click", testReminder);
   document.querySelector("#clearButton").addEventListener("click", () => document.querySelector("#confirmDialog").showModal());
   document.querySelector("#confirmClear").addEventListener("click", clearAllData);
 }
 
 function loadStore() {
-  const defaults = { records: {}, settings: { lastBackupAt: null } };
+  const defaults = { records: {}, settings: { ...DEFAULT_SETTINGS } };
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (!parsed || typeof parsed !== "object" || typeof parsed.records !== "object") return defaults;
@@ -103,12 +119,14 @@ function loadStore() {
 
 function normalizeRecord(record = {}) {
   const allowed = (value, values) => values.includes(value) ? value : null;
+  const legacyPainTypes = Array.isArray(record.symptoms) ? record.symptoms.filter(id => LEGACY_PAIN_IDS.has(id)) : [];
   return {
-    period: record.period || "none", flow: record.flow || null, spotting: Boolean(record.spotting),
+    period: record.period || "none", flow: allowed(record.flow, ["light", "medium", "heavy", "veryHeavy"]), spotting: Boolean(record.spotting),
     energy: allowed(record.energy, ["exhausted", "low", "normal", "high"]),
     pain: allowed(record.pain, ["none", "mild", "moderate", "severe"]),
     mood: allowed(record.mood, ["low", "calm", "sensitive", "irritable"]),
     hadSex: Boolean(record.hadSex), protection: record.protection || null,
+    painTypes: [...new Set([...(Array.isArray(record.painTypes) ? record.painTypes : []), ...legacyPainTypes])].filter(id => PAIN_TYPES.some(item => item.id === id)),
     symptoms: Array.isArray(record.symptoms) ? record.symptoms.filter(id => SYMPTOMS.some(item => item.id === id)) : [],
     customTags: Array.isArray(record.customTags) ? record.customTags.filter(Boolean) : [],
     note: typeof record.note === "string" ? record.note : ""
@@ -129,7 +147,7 @@ function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
 
 function changeMonth(offset) { state.month = new Date(state.month.getFullYear(), state.month.getMonth() + offset, 1, 12); renderCalendar(); }
 function render() {
-  renderToday(); renderCalendar(); renderInsights(); renderBackupStatus();
+  renderToday(); renderCalendar(); renderInsights(); renderBackupStatus(); renderReminderSettings();
   queueMicrotask(refreshIcons);
 }
 
@@ -161,6 +179,7 @@ function renderToday() {
     elements.todayForecast.textContent = "记录至少两次经期开始日期后生成预测。";
     elements.confidenceBadge.hidden = true;
   }
+  renderTodayGuidance(prediction, periodSegment, today);
   elements.todayRecord.replaceChildren();
   const chips = recordLabels(todayRecord);
   if (!chips.length) {
@@ -170,6 +189,25 @@ function renderToday() {
   const recordCount = Object.keys(state.records).length;
   const lastBackup = state.settings.lastBackupAt ? new Date(state.settings.lastBackupAt) : null;
   elements.backupReminder.hidden = recordCount < 5 || (lastBackup && daysBetween(lastBackup, today) < 30);
+}
+
+function renderTodayGuidance(prediction, periodSegment, today) {
+  if (periodSegment) {
+    elements.guidanceTitle.textContent = "记录今天的经量和感受";
+    elements.guidanceCopy.textContent = "连续记录能更清楚地看到每次经期的经量与疼痛变化。"; return;
+  }
+  if (!prediction) {
+    elements.guidanceTitle.textContent = "建立你的周期基线";
+    elements.guidanceCopy.textContent = "持续记录经量、感受和疼痛，变化会出现在分析页。"; return;
+  }
+  const days = daysBetween(today, prediction.start);
+  if (days <= 3 && days >= -1) {
+    elements.guidanceTitle.textContent = "预计经期临近";
+    elements.guidanceCopy.textContent = state.settings.reminderEnabled ? "提醒已开启，也可以导入系统日历获得更可靠的通知。" : "可在设置中开启提醒，或添加到系统日历。";
+  } else {
+    elements.guidanceTitle.textContent = "留意身体变化";
+    elements.guidanceCopy.textContent = "今天的精力、情绪和疼痛会帮助你发现重复出现的模式。";
+  }
 }
 
 function renderCycleRing(cycleDay, prediction, periodSegment) {
@@ -216,12 +254,15 @@ function recordLabels(record) {
   if (!record) return [];
   const labels = [];
   if (record.period && record.period !== "none") labels.push("经期");
+  const flow = { light: "经量少", medium: "经量中", heavy: "经量多", veryHeavy: "经量超多" }[record.flow];
+  if (flow) labels.push(flow);
   if (record.spotting) labels.push("点滴出血");
   if (record.hadSex) labels.push("同房");
   const energy = { exhausted: "精力耗尽", low: "有些疲倦", normal: "精力正常", high: "精力充沛" }[record.energy];
   const pain = { none: "无痛", mild: "轻微疼痛", moderate: "明显疼痛", severe: "严重疼痛" }[record.pain];
   const mood = { low: "情绪低落", calm: "情绪平静", sensitive: "较为敏感", irritable: "烦躁" }[record.mood];
   if (energy) labels.push(energy); if (pain) labels.push(pain); if (mood) labels.push(mood);
+  record.painTypes?.forEach(id => { const item = PAIN_TYPES.find(type => type.id === id); if (item) labels.push(item.label); });
   record.symptoms?.forEach(id => { const item = SYMPTOMS.find(symptom => symptom.id === id); if (item) labels.push(item.label); });
   labels.push(...(record.customTags || []));
   if (record.note) labels.push("有备注");
@@ -251,7 +292,7 @@ function renderCalendar() {
     const markers = button.querySelector(".day-markers");
     if (record?.period && record.period !== "none") markers.append(makeMarker("period-marker"));
     if (record?.hadSex) markers.append(makeMarker("sex-marker"));
-    if (record?.spotting || record?.symptoms?.length || record?.customTags?.length) markers.append(makeMarker("symptom-marker"));
+    if (record?.spotting || record?.painTypes?.length || record?.symptoms?.length || record?.customTags?.length) markers.append(makeMarker("symptom-marker"));
     button.addEventListener("click", () => openRecordDialog(date)); elements.calendarGrid.append(button);
   }
 }
@@ -260,7 +301,7 @@ function matchesCalendarFilter(record) {
   if (state.calendarFilter === "all") return true;
   if (state.calendarFilter === "period") return Boolean(record?.period && record.period !== "none");
   if (state.calendarFilter === "sex") return Boolean(record?.hadSex);
-  return Boolean(record?.spotting || record?.symptoms?.length || record?.customTags?.length);
+  return Boolean(record?.spotting || record?.painTypes?.length || record?.symptoms?.length || record?.customTags?.length);
 }
 function makeMarker(className) { const marker = document.createElement("i"); marker.className = `marker ${className}`; return marker; }
 function dayAriaLabel(date, record) {
@@ -273,6 +314,18 @@ function renderSymptomOptions() {
     const label = document.createElement("label"); label.className = "choice-chip";
     label.innerHTML = `<input type="checkbox" name="symptoms" value="${symptom.id}"><span>${symptom.label}</span>`;
     elements.symptomOptions.append(label);
+  });
+}
+
+function renderPainTypeOptions() {
+  elements.painTypeOptions.replaceChildren();
+  PAIN_TYPES.forEach(type => {
+    const label = document.createElement("label"); label.className = "pain-location-option";
+    label.innerHTML = `<input type="checkbox" name="painTypes" value="${type.id}"><span><i data-lucide="${type.icon}"></i>${type.label}</span>`;
+    label.querySelector("input").addEventListener("change", event => {
+      if (event.target.checked && selectedRadio("pain") === "none") setOptionalRadio("pain", null);
+    });
+    elements.painTypeOptions.append(label);
   });
 }
 
@@ -290,6 +343,7 @@ function populateRecordForm(date) {
   }).format(state.selectedDate);
   setRadio("period", record.period || "none"); setRadio("flow", record.flow || "medium");
   setOptionalRadio("energy", record.energy); setOptionalRadio("pain", record.pain); setOptionalRadio("mood", record.mood);
+  document.querySelectorAll('input[name="painTypes"]').forEach(input => { input.checked = record.painTypes.includes(input.value); });
   elements.spotting.checked = Boolean(record.spotting); elements.hadSex.checked = Boolean(record.hadSex);
   setRadio("protection", record.protection || "unknown");
   document.querySelectorAll('input[name="symptoms"]').forEach(input => { input.checked = record.symptoms.includes(input.value); });
@@ -304,6 +358,9 @@ function setOptionalRadio(name, value) {
   document.querySelectorAll(`input[name="${name}"]`).forEach(input => { input.checked = input.value === value; });
 }
 function selectedRadio(name) { return document.querySelector(`input[name="${name}"]:checked`)?.value; }
+function syncPainSelection() {
+  if (selectedRadio("pain") === "none") document.querySelectorAll('input[name="painTypes"]').forEach(input => { input.checked = false; });
+}
 function renderRecordWeekStrip() {
   elements.recordWeekStrip.replaceChildren();
   for (let offset = -3; offset <= 3; offset += 1) {
@@ -325,6 +382,7 @@ function saveCurrentRecord() {
   const record = normalizeRecord({
     period, flow: period === "none" ? null : selectedRadio("flow"), spotting: elements.spotting.checked,
     energy: selectedRadio("energy"), pain: selectedRadio("pain"), mood: selectedRadio("mood"),
+    painTypes: selectedRadio("pain") === "none" ? [] : [...document.querySelectorAll('input[name="painTypes"]:checked')].map(input => input.value),
     hadSex: elements.hadSex.checked, protection: elements.hadSex.checked ? selectedRadio("protection") : null,
     symptoms: [...document.querySelectorAll('input[name="symptoms"]:checked')].map(input => input.value),
     customTags: parseTags(elements.customTags.value), note: elements.note.value.trim()
@@ -334,7 +392,7 @@ function saveCurrentRecord() {
 }
 function parseTags(value) { return [...new Set(value.split(/[，,、]/).map(item => item.trim()).filter(Boolean))].slice(0, 8); }
 function recordHasData(record) {
-  return Boolean((record.period && record.period !== "none") || record.spotting || record.energy || record.pain || record.mood || record.hadSex || record.symptoms?.length || record.customTags?.length || record.note);
+  return Boolean((record.period && record.period !== "none") || record.spotting || record.energy || record.pain || record.mood || record.painTypes?.length || record.hadSex || record.symptoms?.length || record.customTags?.length || record.note);
 }
 function deleteCurrentRecord() {
   delete state.records[dateKey(state.selectedDate)]; persist(); elements.recordDialog.close(); render(); showToast("记录已删除");
@@ -452,40 +510,60 @@ function renderRegularity(items) {
   const values = items.map(item => item.days); const circumference = 2 * Math.PI * 31;
   if (values.length < 2) {
     elements.regularityArc.style.strokeDasharray = `0 ${circumference}`; elements.regularityValue.textContent = "--";
+    elements.regularityValue.dataset.empty = "true";
     elements.analysisVerdict.textContent = "等待更多记录"; elements.analysisCopy.textContent = "至少记录三个周期后生成个人变化结论。"; return;
   }
   const deviation = standardDeviation(values); const score = clamp(Math.round(100 - deviation * 10), 0, 100);
   const range = Math.max(...values) - Math.min(...values);
   elements.regularityArc.style.strokeDasharray = `${circumference * score / 100} ${circumference}`;
-  elements.regularityValue.textContent = `${score}`;
+  elements.regularityValue.textContent = `${score}`; elements.regularityValue.dataset.empty = "false";
   elements.analysisVerdict.textContent = score >= 80 ? "整体较稳定" : score >= 60 ? "有一些波动" : "近期波动明显";
   elements.analysisCopy.textContent = `最近周期在 ${Math.min(...values)}–${Math.max(...values)} 天之间，相差 ${range} 天。`;
 }
 
 function renderChangeSummary(intervals, lengths) {
   const changes = [];
-  if (intervals.length >= 3) {
-    const latest = intervals.at(-1).days; const baseline = average(intervals.slice(0, -1).map(item => item.days)); const difference = Math.round(latest - baseline);
-    changes.push({ icon: difference === 0 ? "minus" : difference > 0 ? "trending-up" : "trending-down", title: `最近周期${difference === 0 ? "接近往常" : difference > 0 ? `长了约 ${difference} 天` : `短了约 ${Math.abs(difference)} 天`}`, copy: `本次 ${latest} 天，之前平均约 ${Math.round(baseline)} 天。` });
+  const intervalValues = intervals.map(item => item.days);
+  if (intervalValues.length >= 4) {
+    const windowSize = Math.min(3, Math.floor(intervalValues.length / 2));
+    const previous = intervalValues.slice(-windowSize * 2, -windowSize); const recent = intervalValues.slice(-windowSize);
+    const previousAverage = Math.round(average(previous)); const recentAverage = Math.round(average(recent));
+    const averageDifference = recentAverage - previousAverage;
+    const previousVariation = Math.max(...previous) - Math.min(...previous); const recentVariation = Math.max(...recent) - Math.min(...recent);
+    const variationDifference = recentVariation - previousVariation;
+    changes.push({
+      icon: averageDifference === 0 ? "circle-check" : averageDifference > 0 ? "trending-up" : "trending-down",
+      tone: Math.abs(averageDifference) >= 3 ? "attention" : "stable",
+      title: averageDifference === 0 ? "平均周期没有明显变化" : `平均周期${averageDifference > 0 ? "变长" : "变短"} ${Math.abs(averageDifference)} 天`,
+      copy: `从此前约 ${previousAverage} 天变为近期约 ${recentAverage} 天。`
+    });
+    changes.push({
+      icon: variationDifference <= 0 ? "badge-check" : "triangle-alert", tone: recentVariation >= 8 ? "attention" : "stable",
+      title: variationDifference === 0 ? "周期波动保持不变" : `周期波动${variationDifference > 0 ? "增加" : "减少"} ${Math.abs(variationDifference)} 天`,
+      copy: `周期长度范围从相差 ${previousVariation} 天变为相差 ${recentVariation} 天。`
+    });
+  } else if (intervalValues.length >= 3) {
+    const latest = intervalValues.at(-1); const baseline = average(intervalValues.slice(0, -1)); const difference = Math.round(latest - baseline);
+    changes.push({ icon: difference === 0 ? "circle-check" : difference > 0 ? "trending-up" : "trending-down", tone: Math.abs(difference) >= 3 ? "attention" : "stable", title: `最近周期${difference === 0 ? "接近往常" : difference > 0 ? `长了约 ${difference} 天` : `短了约 ${Math.abs(difference)} 天`}`, copy: `本次 ${latest} 天，此前平均约 ${Math.round(baseline)} 天。` });
   }
   if (lengths.length >= 3) {
     const latest = lengths.at(-1); const baseline = average(lengths.slice(0, -1)); const difference = Math.round(latest - baseline);
-    changes.push({ icon: "droplets", title: `最近经期持续 ${latest} 天`, copy: Math.abs(difference) < 1 ? "与此前记录接近。" : `比此前平均${difference > 0 ? "多" : "少"}约 ${Math.abs(difference)} 天。` });
+    changes.push({ icon: "droplets", tone: Math.abs(difference) >= 2 ? "attention" : "stable", title: `最近经期持续 ${latest} 天`, copy: Math.abs(difference) < 1 ? "与此前记录接近。" : `比此前平均${difference > 0 ? "多" : "少"}约 ${Math.abs(difference)} 天。` });
   }
   if (!changes.length) { elements.changeSummary.innerHTML = '<div class="empty-state">记录至少三个周期后比较变化</div>'; return; }
-  elements.changeSummary.innerHTML = changes.map(item => `<div class="change-item"><i data-lucide="${item.icon}"></i><div><strong>${item.title}</strong><span>${item.copy}</span></div></div>`).join("");
+  elements.changeSummary.innerHTML = changes.map(item => `<div class="change-item ${item.tone || "stable"}"><span class="change-icon"><i data-lucide="${item.icon}"></i></span><div><strong>${item.title}</strong><span>${item.copy}</span></div></div>`).join("");
 }
 
 function renderFlowHistory(starts) {
   if (!starts.length) { elements.flowHistory.innerHTML = '<div class="empty-state">记录经期流量后显示历史</div>'; return; }
   const rows = starts.slice().reverse().map(start => {
     const cells = Array.from({ length: 7 }, (_, offset) => {
-      const record = state.records[dateKey(addDays(start, offset))]; const level = ["light", "medium", "heavy"].includes(record?.flow) ? record.flow : "empty";
+      const record = state.records[dateKey(addDays(start, offset))]; const level = ["light", "medium", "heavy", "veryHeavy"].includes(record?.flow) ? record.flow : "empty";
       return `<i class="flow-cell ${level}" title="第 ${offset + 1} 天"></i>`;
     }).join("");
     return `<div class="flow-row"><span>${formatShortDate(start)}</span><div class="flow-cells">${cells}</div></div>`;
   }).join("");
-  elements.flowHistory.innerHTML = `${rows}<div class="flow-legend"><span><i class="light"></i>少</span><span><i class="medium"></i>中</span><span><i class="heavy"></i>多</span></div>`;
+  elements.flowHistory.innerHTML = `${rows}<div class="flow-legend"><span><i class="light"></i>少</span><span><i class="medium"></i>中</span><span><i class="heavy"></i>多</span><span><i class="veryHeavy"></i>超多</span></div>`;
 }
 
 function renderCycleChart(items) {
@@ -503,13 +581,15 @@ function renderCycleChart(items) {
 
 function renderSymptomSummary() {
   const counts = new Map();
-  Object.values(state.records).forEach(record => record.symptoms?.forEach(id => counts.set(id, (counts.get(id) || 0) + 1)));
+  Object.values(state.records).forEach(record => {
+    [...(record.painTypes || []), ...(record.symptoms || [])].forEach(id => counts.set(id, (counts.get(id) || 0) + 1));
+  });
   const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
   if (!ranked.length) { elements.symptomSummary.innerHTML = '<div class="empty-state">记录症状后显示出现频率</div>'; return; }
   const max = ranked[0][1]; elements.symptomSummary.replaceChildren();
   ranked.forEach(([id, count]) => {
     const row = document.createElement("div"); row.className = "symptom-bar-row";
-    const label = SYMPTOMS.find(item => item.id === id)?.label || id;
+    const label = [...PAIN_TYPES, ...SYMPTOMS].find(item => item.id === id)?.label || id;
     row.innerHTML = `<span>${label}</span><i><b style="width:${Math.round(count / max * 100)}%"></b></i><strong>${count} 次</strong>`;
     elements.symptomSummary.append(row);
   });
@@ -576,7 +656,7 @@ async function restoreEncryptedData(password) {
 function restorePayload(payload) {
   if (![1, 2].includes(payload.version) || !payload.records || typeof payload.records !== "object") throw new Error("invalid");
   state.records = Object.fromEntries(Object.entries(payload.records).map(([key, record]) => [key, normalizeRecord(record)]));
-  state.settings = { lastBackupAt: null, ...(payload.settings || {}) }; persist(); render();
+  state.settings = { ...DEFAULT_SETTINGS, ...(payload.settings || {}) }; persist(); render();
 }
 async function deriveBackupKey(password, salt, usages, iterations = BACKUP_ITERATIONS) {
   const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
@@ -592,24 +672,95 @@ function downloadText(value, filename, type) {
   const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function renderReminderSettings() {
+  const enabled = Boolean(state.settings.reminderEnabled);
+  elements.reminderEnabled.checked = enabled; elements.reminderControls.hidden = !enabled;
+  elements.reminderDays.value = String(clamp(Number(state.settings.reminderDays) || 0, 0, 3));
+  elements.reminderTime.value = /^\d{2}:\d{2}$/.test(state.settings.reminderTime) ? state.settings.reminderTime : "09:00";
+  if (!enabled) elements.reminderStatus.textContent = "尚未开启";
+  else if (!("Notification" in window)) elements.reminderStatus.textContent = "浏览器不支持通知，可使用系统日历";
+  else if (Notification.permission === "denied") elements.reminderStatus.textContent = "通知已被浏览器阻止，可使用系统日历";
+  else elements.reminderStatus.textContent = `${reminderLeadLabel()}，${elements.reminderTime.value}`;
+}
+
+async function handleReminderToggle() {
+  state.settings.reminderEnabled = elements.reminderEnabled.checked;
+  if (state.settings.reminderEnabled && "Notification" in window && Notification.permission === "default") {
+    await Notification.requestPermission();
+  }
+  persist(); renderReminderSettings(); renderToday();
+  showToast(state.settings.reminderEnabled ? "经期提醒已开启" : "经期提醒已关闭");
+}
+
+function saveReminderSettings() {
+  state.settings.reminderDays = clamp(Number(elements.reminderDays.value) || 0, 0, 3);
+  state.settings.reminderTime = /^\d{2}:\d{2}$/.test(elements.reminderTime.value) ? elements.reminderTime.value : "09:00";
+  state.settings.lastReminderKey = null; persist(); renderReminderSettings();
+}
+
+function reminderLeadLabel() {
+  const days = clamp(Number(state.settings.reminderDays) || 0, 0, 3);
+  return days ? `提前 ${days} 天` : "预计当天";
+}
+
+async function testReminder() {
+  if (!("Notification" in window)) { showToast("当前浏览器不支持通知，请使用系统日历提醒"); return; }
+  let permission = Notification.permission;
+  if (permission === "default") permission = await Notification.requestPermission();
+  if (permission !== "granted") { showToast("通知权限未开启，请检查浏览器网站权限"); renderReminderSettings(); return; }
+  await showSystemNotification("周期记提醒测试", "通知可以正常显示。预计日期仍会根据记录变化。", "cycle-journal-test");
+  showToast("测试通知已发送");
+}
+
+async function checkPredictionReminder() {
+  if (!state.settings.reminderEnabled || !("Notification" in window) || Notification.permission !== "granted") return;
+  const prediction = calculatePrediction(); if (!prediction) return;
+  const reminderDate = addDays(prediction.start, -clamp(Number(state.settings.reminderDays) || 0, 0, 3));
+  const [hour, minute] = (state.settings.reminderTime || "09:00").split(":").map(Number);
+  reminderDate.setHours(hour, minute, 0, 0);
+  const now = new Date(); const deadline = addDays(prediction.startUpper, 1);
+  const reminderKey = `${dateKey(prediction.start)}-${state.settings.reminderDays}`;
+  if (now < reminderDate || now >= deadline || state.settings.lastReminderKey === reminderKey) return;
+  const days = daysBetween(startOfDay(now), prediction.start);
+  const title = days <= 0 ? "你今天可能会来月经" : `预计还有 ${days} 天来月经`;
+  await showSystemNotification(title, `预计开始区间：${formatRange(prediction.startLower, prediction.startUpper)}。`, `cycle-journal-${dateKey(prediction.start)}`);
+  state.settings.lastReminderKey = reminderKey; persist();
+}
+
+async function showSystemNotification(title, body, tag) {
+  if ("serviceWorker" in navigator) {
+    const registration = await navigator.serviceWorker.ready;
+    return registration.showNotification(title, { body, tag, icon: "icons/icon-192.png", badge: "icons/icon-192.png" });
+  }
+  return new Notification(title, { body, tag, icon: "icons/icon-192.png" });
+}
+
 function exportPredictionCalendar() {
   const prediction = calculatePrediction();
   if (!prediction) { showToast("至少记录两次经期开始日期后才能导出"); return; }
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
   const start = calendarDate(prediction.startLower); const end = calendarDate(addDays(prediction.startUpper, 1));
+  const reminderDate = addDays(prediction.start, -clamp(Number(state.settings.reminderDays) || 0, 0, 3));
+  const reminderStart = `${calendarDate(reminderDate)}T${(state.settings.reminderTime || "09:00").replace(":", "")}00`;
+  const reminderEndDate = new Date(reminderDate); reminderEndDate.setMinutes(reminderEndDate.getMinutes() + 15);
+  const reminderEnd = `${calendarDate(reminderEndDate)}T${String(reminderEndDate.getHours()).padStart(2, "0")}${String(reminderEndDate.getMinutes()).padStart(2, "0")}00`;
   const uid = `cycle-journal-${dateKey(prediction.start)}@local`;
   const content = [
     "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Cycle Journal//ZH-CN", "CALSCALE:GREGORIAN",
     "BEGIN:VEVENT", `UID:${uid}`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${start}`, `DTEND;VALUE=DATE:${end}`,
     "SUMMARY:预计经期开始区间", "DESCRIPTION:根据本机历史记录估算，仅供记录参考，不用于避孕、诊断或治疗。",
-    "TRANSP:TRANSPARENT", "END:VEVENT", "END:VCALENDAR", ""
+    "TRANSP:TRANSPARENT", "END:VEVENT",
+    "BEGIN:VEVENT", `UID:reminder-${uid}`, `DTSTAMP:${stamp}`, `DTSTART:${reminderStart}`, `DTEND:${reminderEnd}`,
+    "SUMMARY:经期预计临近", `DESCRIPTION:预计开始区间为 ${formatRange(prediction.startLower, prediction.startUpper)}。`,
+    "BEGIN:VALARM", "ACTION:DISPLAY", "TRIGGER:-PT0M", "DESCRIPTION:经期预计临近", "END:VALARM", "END:VEVENT",
+    "END:VCALENDAR", ""
   ].join("\r\n");
   downloadText(content, `周期记-预计日期-${dateKey(prediction.start)}.ics`, "text/calendar;charset=utf-8");
   showToast("日历文件已导出");
 }
 function calendarDate(date) { return dateKey(date).replaceAll("-", ""); }
 
-function clearAllData() { state.records = {}; state.settings = { lastBackupAt: null }; persist(); render(); showToast("全部数据已清除"); }
+function clearAllData() { state.records = {}; state.settings = { ...DEFAULT_SETTINGS }; persist(); render(); showToast("全部数据已清除"); }
 function showView(viewId) {
   document.querySelectorAll(".view").forEach(view => view.classList.toggle("active", view.id === viewId));
   document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab.dataset.view === viewId));
