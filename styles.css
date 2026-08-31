@@ -404,3 +404,71 @@ dialog { border: 1px solid rgba(220,227,223,.8); }
 @media (min-width: 721px) {
   .app-shell { box-shadow: 0 0 0 1px rgba(23,32,29,.07), 0 18px 55px rgba(23,32,29,.08); }
 }
+
+/* Fifth edition: intimacy totals and private partner summaries. */
+.sex-count-marker { width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; background: var(--sex); color: white; font-size: 9px; font-style: normal; font-weight: 800; }
+.month-intimacy-summary { padding: 22px 20px 24px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface); }
+.month-intimacy-summary h3 { margin-bottom: 0; }
+.intimacy-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.intimacy-metrics > div { min-width: 0; padding: 15px 10px; border-right: 1px solid var(--line); text-align: center; }
+.intimacy-metrics > div:last-child { border-right: 0; }
+.intimacy-metrics strong, .intimacy-metrics span { display: block; }
+.intimacy-metrics strong { font-size: 25px; font-variant-numeric: tabular-nums; }
+.intimacy-metrics span { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.3; }
+.month-intimacy-summary > p { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+
+.sex-counter-row { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.sex-counter-row > span strong, .sex-counter-row > span small { display: block; }
+.sex-counter-row > span small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.number-stepper { flex: 0 0 auto; height: 42px; display: grid; grid-template-columns: 40px 46px 40px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #f5f7f6; }
+.number-stepper button { display: grid; place-items: center; border: 0; background: transparent; color: var(--sex); cursor: pointer; }
+.number-stepper button:disabled { color: #b8c1bd; cursor: default; }
+.number-stepper button svg { width: 18px; height: 18px; }
+.number-stepper output { display: grid; place-items: center; border-right: 1px solid var(--line); border-left: 1px solid var(--line); background: white; font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.protection-options { width: min(100%, 300px); }
+.protection-options span { font-size: 11px; }
+
+.partner-panel { margin-top: 18px; padding: 20px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface); }
+.partner-heading { display: grid; grid-template-columns: 40px 1fr; align-items: center; gap: 12px; margin-bottom: 18px; }
+.partner-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; background: var(--mood-soft); color: var(--mood); }
+.partner-icon svg { width: 20px; height: 20px; }
+.partner-heading strong, .partner-heading small { display: block; }
+.partner-heading small { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.partner-name-field, .partner-message-field { display: block; margin-top: 12px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.partner-name-field input, .partner-message-field input { width: 100%; min-height: 42px; margin-top: 6px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 6px; background: #fbfcfb; color: var(--ink); }
+.partner-sharing { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--line); }
+.partner-sharing > p { margin-bottom: 8px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.partner-sharing label { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid #edf0ee; font-size: 13px; }
+.partner-sharing input[role="switch"] { transform: scale(.86); transform-origin: right center; }
+.partner-privacy { display: flex; align-items: flex-start; gap: 7px; margin: 14px 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.partner-privacy svg { width: 15px; height: 15px; flex: 0 0 15px; color: var(--sex); }
+.partner-preview-button { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.partner-preview-button svg { width: 18px; height: 18px; }
+
+#partnerSummaryDialog { width: min(calc(100% - 24px), 500px); }
+.partner-summary-dialog-content { max-height: 92vh; padding: 20px; overflow-y: auto; }
+.partner-summary-preview { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #f3f7f5; }
+.summary-preview-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; background: var(--sex); color: white; }
+.summary-preview-header span { font-weight: 800; }
+.summary-preview-header small { opacity: .82; font-size: 9px; }
+.partner-summary-preview > h3 { margin: 0; padding: 20px 16px 0; font-size: 20px; line-height: 1.35; }
+.summary-message { margin: 8px 16px 18px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.summary-preview-section { display: grid; grid-template-columns: 34px 1fr; gap: 11px; margin: 0 16px; padding: 14px 0; border-top: 1px solid var(--line); }
+.summary-preview-section > span { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: var(--sex-soft); color: var(--sex); }
+.summary-preview-section svg { width: 16px; height: 16px; }
+.summary-preview-section small, .summary-preview-section strong, .summary-preview-section p { display: block; }
+.summary-preview-section small { color: var(--muted); font-size: 9px; }
+.summary-preview-section strong { margin-top: 2px; font-size: 13px; line-height: 1.4; }
+.summary-preview-section p { margin: 3px 0 0; color: var(--muted); font-size: 9px; }
+.summary-preview-footer { display: block; padding: 13px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 9px; }
+.partner-summary-dialog-content > .form-note { margin: 11px 0 0; }
+.partner-summary-dialog-content .dialog-actions { flex-wrap: wrap; }
+.partner-summary-dialog-content .dialog-actions button { display: flex; align-items: center; justify-content: center; gap: 7px; }
+.partner-summary-dialog-content .dialog-actions svg { width: 17px; height: 17px; }
+
+@media (max-width: 430px) {
+  .month-intimacy-summary, .partner-panel { padding-right: 16px; padding-left: 16px; }
+  .protection-row { align-items: stretch; }
+  .protection-options { width: 100%; }
+  .partner-summary-dialog-content .dialog-actions button { flex: 1 1 140px; }
+}

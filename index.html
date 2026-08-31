@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=5">
+  <link rel="stylesheet" href="styles.css?v=6">
 </head>
 <body>
   <div class="app-shell">
@@ -96,6 +96,15 @@
           <button class="filter-button" data-filter="symptoms" type="button">症状</button>
           <button class="filter-button" data-filter="sex" type="button">同房</button>
         </div>
+        <div class="month-intimacy-summary" id="monthIntimacySummary">
+          <div class="section-row"><h3>本月亲密记录</h3><span id="intimacyMonthLabel"></span></div>
+          <div class="intimacy-metrics">
+            <div><strong id="monthlySexTotal">0</strong><span>总次数</span></div>
+            <div><strong id="monthlySexDays">0</strong><span>记录天数</span></div>
+            <div><strong id="monthlyUnprotectedDays">0</strong><span>含未保护天数</span></div>
+          </div>
+          <p id="monthlyProtectionCopy">本月还没有亲密记录。</p>
+        </div>
       </section>
 
       <section class="view" id="insightsView" aria-labelledby="insightsTab">
@@ -144,6 +153,19 @@
             <button class="secondary-button" id="testReminderButton" type="button"><i data-lucide="send"></i>测试通知</button>
           </div>
           <p class="reminder-note">网页关闭后，系统日历提醒更可靠；导出的预计日期会自动带提醒。</p>
+        </div>
+        <div class="partner-panel">
+          <div class="partner-heading"><span class="partner-icon"><i data-lucide="heart-handshake"></i></span><div><strong>伴侣摘要</strong><small>生成图片后由你亲自发送</small></div></div>
+          <label class="partner-name-field">伴侣昵称<input id="partnerNameInput" maxlength="20" placeholder="例如：小明"></label>
+          <label class="partner-message-field">想说的话<input id="partnerMessageInput" maxlength="40" placeholder="例如：这几天可能需要多休息"></label>
+          <div class="partner-sharing">
+            <p>摘要中包含</p>
+            <label><span>周期和预计日期</span><input id="shareCycleInput" type="checkbox" role="switch" checked></label>
+            <label><span>疼痛和身体感受</span><input id="shareBodyInput" type="checkbox" role="switch" checked></label>
+            <label><span>情绪状态</span><input id="shareMoodInput" type="checkbox" role="switch" checked></label>
+          </div>
+          <p class="partner-privacy"><i data-lucide="shield-check"></i>同房记录、备注和自定义标签始终不会进入摘要。</p>
+          <button class="primary-button partner-preview-button" id="previewPartnerSummaryButton" type="button"><i data-lucide="image"></i>预览伴侣摘要</button>
         </div>
         <div class="settings-list">
           <button class="settings-row" id="exportButton" type="button">
@@ -247,15 +269,20 @@
 
       <fieldset>
         <legend>同房</legend>
-        <label class="switch-row">
-          <span>当天有记录</span>
-          <input id="hadSexInput" type="checkbox" role="switch">
-        </label>
+        <div class="sex-counter-row">
+          <span><strong>当天次数</strong><small>最多记录 9 次</small></span>
+          <div class="number-stepper" aria-label="当天同房次数">
+            <button id="decreaseSexCount" type="button" aria-label="减少次数" title="减少次数"><i data-lucide="minus"></i></button>
+            <output id="sexCountValue" aria-live="polite">0</output>
+            <button id="increaseSexCount" type="button" aria-label="增加次数" title="增加次数"><i data-lucide="plus"></i></button>
+          </div>
+        </div>
         <div class="protection-row" id="protectionRow">
           <span>保护措施</span>
-          <div class="segmented three compact">
-            <label><input type="radio" name="protection" value="yes"><span>有</span></label>
-            <label><input type="radio" name="protection" value="no"><span>无</span></label>
+          <div class="segmented four protection-options">
+            <label><input type="radio" name="protection" value="all"><span>全部有</span></label>
+            <label><input type="radio" name="protection" value="partial"><span>部分有</span></label>
+            <label><input type="radio" name="protection" value="none"><span>均无</span></label>
             <label><input type="radio" name="protection" value="unknown"><span>不记</span></label>
           </div>
         </div>
@@ -329,8 +356,23 @@
     </form>
   </dialog>
 
+  <dialog id="partnerSummaryDialog">
+    <div class="partner-summary-dialog-content">
+      <div class="dialog-header">
+        <div><p class="eyebrow">发送前确认</p><h2>伴侣摘要</h2></div>
+        <button class="icon-button" id="closePartnerSummary" aria-label="关闭" title="关闭" type="button"><i data-lucide="x"></i></button>
+      </div>
+      <div class="partner-summary-preview" id="partnerSummaryPreview"></div>
+      <p class="form-note">摘要由当前设备生成，不会上传到服务器。</p>
+      <div class="dialog-actions">
+        <button class="secondary-button" id="downloadPartnerSummary" type="button"><i data-lucide="download"></i>保存图片</button>
+        <button class="primary-button" id="sharePartnerSummary" type="button"><i data-lucide="share-2"></i>发送给伴侣</button>
+      </div>
+    </div>
+  </dialog>
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="vendor/lucide.min.js?v=5"></script>
-  <script src="app.js?v=5"></script>
+  <script src="vendor/lucide.min.js?v=6"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>
