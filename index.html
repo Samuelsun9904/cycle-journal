@@ -26,7 +26,30 @@
     </header>
 
     <main>
-      <section class="view active" id="calendarView" aria-labelledby="calendarTab">
+      <section class="view active" id="todayView" aria-labelledby="todayTab">
+        <div class="today-status">
+          <p class="eyebrow" id="todayCycleLabel">等待周期记录</p>
+          <div class="status-line">
+            <strong id="todayStatus">从今天开始了解身体规律</strong>
+            <span class="confidence-badge" id="confidenceBadge" hidden></span>
+          </div>
+          <p id="todayForecast">记录至少两次经期开始日期后生成预测。</p>
+        </div>
+        <div class="quick-actions">
+          <button class="primary-button quick-primary" id="logTodayButton" type="button">记录今天</button>
+          <button class="secondary-button" id="logPeriodRangeButton" type="button">记录一段经期</button>
+        </div>
+        <div class="today-details">
+          <div class="section-row"><h2>今日记录</h2><button class="inline-button" id="editTodayButton" type="button">编辑</button></div>
+          <div class="today-record" id="todayRecord"></div>
+        </div>
+        <button class="backup-reminder" id="backupReminder" type="button" hidden>
+          <span><strong>该备份数据了</strong><small>生成一份加密文件，防止换机或误删</small></span>
+          <b aria-hidden="true">›</b>
+        </button>
+      </section>
+
+      <section class="view" id="calendarView" aria-labelledby="calendarTab">
         <div class="month-toolbar">
           <button class="icon-button" id="previousMonth" type="button" aria-label="上个月" title="上个月">‹</button>
           <div class="month-title">
@@ -44,7 +67,14 @@
         <div class="legend" aria-label="日历标记说明">
           <span><i class="legend-period"></i>经期</span>
           <span><i class="legend-sex"></i>同房</span>
+          <span><i class="legend-symptom"></i>症状</span>
           <span><i class="legend-predicted"></i>预计</span>
+        </div>
+        <div class="calendar-filters" aria-label="日历筛选">
+          <button class="filter-button active" data-filter="all" type="button">全部</button>
+          <button class="filter-button" data-filter="period" type="button">经期</button>
+          <button class="filter-button" data-filter="symptoms" type="button">症状</button>
+          <button class="filter-button" data-filter="sex" type="button">同房</button>
         </div>
       </section>
 
@@ -55,6 +85,14 @@
         </div>
         <div class="metrics" id="metrics"></div>
         <p class="prediction-note">日期预测仅根据历史记录估算，不用于避孕、诊断或治疗。</p>
+        <div class="chart-section">
+          <div class="section-row"><h3>周期长度趋势</h3><span>最近 6 次</span></div>
+          <div class="cycle-chart" id="cycleChart"></div>
+        </div>
+        <div class="symptom-section">
+          <h3>常见症状</h3>
+          <div class="symptom-summary" id="symptomSummary"></div>
+        </div>
         <div class="history-section">
           <h3>历史记录</h3>
           <div class="history-list" id="historyList"></div>
@@ -68,10 +106,10 @@
         </div>
         <div class="settings-list">
           <button class="settings-row" id="exportButton" type="button">
-            <span><strong>导出备份</strong><small>保存为 JSON 文件</small></span><b aria-hidden="true">↓</b>
+            <span><strong>导出加密备份</strong><small id="backupStatus">使用密码保护 JSON 文件</small></span><b aria-hidden="true">↓</b>
           </button>
           <label class="settings-row file-row" for="importInput">
-            <span><strong>恢复备份</strong><small>从 JSON 文件导入</small></span><b aria-hidden="true">↑</b>
+            <span><strong>恢复备份</strong><small>支持加密备份与第一版文件</small></span><b aria-hidden="true">↑</b>
           </label>
           <input id="importInput" type="file" accept="application/json,.json" hidden>
           <button class="settings-row danger-row" id="clearButton" type="button">
@@ -86,7 +124,8 @@
     </main>
 
     <nav class="tabbar" aria-label="主导航">
-      <button class="tab active" id="calendarTab" data-view="calendarView" type="button"><span aria-hidden="true">▦</span>日历</button>
+      <button class="tab active" id="todayTab" data-view="todayView" type="button"><span aria-hidden="true">●</span>今天</button>
+      <button class="tab" id="calendarTab" data-view="calendarView" type="button"><span aria-hidden="true">▦</span>日历</button>
       <button class="tab" id="insightsTab" data-view="insightsView" type="button"><span aria-hidden="true">⌁</span>概览</button>
       <button class="tab" id="settingsTab" data-view="settingsView" type="button"><span aria-hidden="true">⚙</span>设置</button>
     </nav>
@@ -108,6 +147,11 @@
           <label><input type="radio" name="period" value="end"><span>结束</span></label>
         </div>
       </fieldset>
+
+      <label class="switch-row spotting-switch">
+        <span>点滴出血</span>
+        <input id="spottingInput" type="checkbox" role="switch">
+      </label>
 
       <fieldset id="flowFieldset">
         <legend>流量</legend>
@@ -134,10 +178,58 @@
         </div>
       </fieldset>
 
+      <fieldset>
+        <legend>症状</legend>
+        <div class="choice-grid" id="symptomOptions"></div>
+      </fieldset>
+
+      <label class="note-field">自定义标签<input class="text-input" id="customTagsInput" maxlength="100" placeholder="例如：加班、旅行，用逗号分隔"></label>
+
       <label class="note-field">备注<textarea id="noteInput" maxlength="200" rows="3" placeholder="可选"></textarea></label>
       <div class="dialog-actions">
         <button class="text-button danger" id="deleteRecord" type="button">删除记录</button>
+        <button class="text-button" id="editPeriodRange" type="button">编辑整段</button>
         <button class="primary-button" id="saveRecord" type="button">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="periodRangeDialog">
+    <form method="dialog" id="periodRangeForm">
+      <div class="dialog-header">
+        <div><p class="eyebrow">经期区间</p><h2 id="periodRangeTitle">记录一段经期</h2></div>
+        <button class="icon-button" value="cancel" aria-label="关闭" title="关闭" type="submit">×</button>
+      </div>
+      <div class="date-range-fields">
+        <label>开始日期<input id="periodStartInput" type="date" required></label>
+        <label>结束日期<input id="periodEndInput" type="date" required></label>
+      </div>
+      <fieldset>
+        <legend>默认流量</legend>
+        <div class="segmented three">
+          <label><input type="radio" name="rangeFlow" value="light"><span>少</span></label>
+          <label><input type="radio" name="rangeFlow" value="medium" checked><span>中</span></label>
+          <label><input type="radio" name="rangeFlow" value="heavy"><span>多</span></label>
+        </div>
+      </fieldset>
+      <p class="form-note">保存后仍可逐日调整流量，其他日期记录不会被覆盖。</p>
+      <div class="dialog-actions">
+        <button class="text-button danger" id="deletePeriodRange" type="button" hidden>删除整段</button>
+        <button class="primary-button" id="savePeriodRange" type="button">保存区间</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="confirm-dialog" id="backupDialog">
+    <form method="dialog" id="backupForm">
+      <h2 id="backupDialogTitle">创建加密备份</h2>
+      <p id="backupDialogText">设置一个备份密码。恢复数据时必须使用相同密码。</p>
+      <label class="password-field">备份密码<input id="backupPassword" type="password" minlength="8" autocomplete="new-password"></label>
+      <label class="password-field" id="confirmPasswordField">再次输入<input id="backupPasswordConfirm" type="password" minlength="8" autocomplete="new-password"></label>
+      <p class="field-error" id="backupError" role="alert"></p>
+      <div class="dialog-actions">
+        <button class="text-button" value="cancel">取消</button>
+        <button class="primary-button" id="confirmBackupAction" type="button">导出</button>
       </div>
     </form>
   </dialog>
