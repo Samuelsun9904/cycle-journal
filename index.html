@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=3">
+  <link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
   <div class="app-shell">
@@ -21,23 +21,39 @@
         <h1>周期记</h1>
       </div>
       <button class="icon-button" id="todayButton" type="button" aria-label="回到今天" title="回到今天">
-        <span aria-hidden="true">今</span>
+        <i data-lucide="calendar-days" aria-hidden="true"></i>
       </button>
     </header>
 
     <main>
       <section class="view active" id="todayView" aria-labelledby="todayTab">
-        <div class="today-status">
-          <p class="eyebrow" id="todayCycleLabel">等待周期记录</p>
-          <div class="status-line">
-            <strong id="todayStatus">从今天开始了解身体规律</strong>
-            <span class="confidence-badge" id="confidenceBadge" hidden></span>
+        <div class="cycle-hero">
+          <div class="cycle-ring-wrap" aria-label="当前周期进度">
+            <svg class="cycle-ring" viewBox="0 0 240 240" role="img">
+              <circle class="ring-track" cx="120" cy="120" r="94"></circle>
+              <circle class="ring-prediction" id="ringPrediction" cx="120" cy="120" r="94"></circle>
+              <circle class="ring-period" id="ringPeriod" cx="120" cy="120" r="94"></circle>
+              <circle class="ring-progress" id="ringProgress" cx="120" cy="120" r="94"></circle>
+            </svg>
+            <div class="ring-center">
+              <span id="ringPhase">等待记录</span>
+              <strong id="ringDay">--</strong>
+              <small id="ringCaption">周期日</small>
+            </div>
           </div>
-          <p id="todayForecast">记录至少两次经期开始日期后生成预测。</p>
+          <div class="cycle-hero-copy">
+            <p class="eyebrow" id="todayCycleLabel">等待周期记录</p>
+            <div class="status-line">
+              <strong id="todayStatus">从今天开始了解身体规律</strong>
+              <span class="confidence-badge" id="confidenceBadge" hidden></span>
+            </div>
+            <p id="todayForecast">记录至少两次经期开始日期后生成预测。</p>
+            <div class="phase-legend"><span><i></i>已进行</span><span><i></i>经期</span><span><i></i>预计区间</span></div>
+          </div>
         </div>
         <div class="quick-actions">
-          <button class="primary-button quick-primary" id="logTodayButton" type="button">记录今天</button>
-          <button class="secondary-button" id="logPeriodRangeButton" type="button">记录一段经期</button>
+          <button class="primary-button quick-primary" id="logTodayButton" type="button"><i data-lucide="plus"></i>记录今天</button>
+          <button class="secondary-button" id="logPeriodRangeButton" type="button"><i data-lucide="calendar-range"></i>记录一段经期</button>
         </div>
         <div class="today-details">
           <div class="section-row"><h2>今日记录</h2><button class="inline-button" id="editTodayButton" type="button">编辑</button></div>
@@ -45,18 +61,18 @@
         </div>
         <button class="backup-reminder" id="backupReminder" type="button" hidden>
           <span><strong>该备份数据了</strong><small>生成一份加密文件，防止换机或误删</small></span>
-          <b aria-hidden="true">›</b>
+          <i data-lucide="chevron-right" aria-hidden="true"></i>
         </button>
       </section>
 
       <section class="view" id="calendarView" aria-labelledby="calendarTab">
         <div class="month-toolbar">
-          <button class="icon-button" id="previousMonth" type="button" aria-label="上个月" title="上个月">‹</button>
+          <button class="icon-button" id="previousMonth" type="button" aria-label="上个月" title="上个月"><i data-lucide="chevron-left"></i></button>
           <div class="month-title">
             <span id="monthTitle"></span>
             <span class="month-subtitle" id="cycleSummary"></span>
           </div>
-          <button class="icon-button" id="nextMonth" type="button" aria-label="下个月" title="下个月">›</button>
+          <button class="icon-button" id="nextMonth" type="button" aria-label="下个月" title="下个月"><i data-lucide="chevron-right"></i></button>
         </div>
 
         <div class="weekdays" aria-hidden="true">
@@ -83,6 +99,10 @@
           <p class="eyebrow">近 6 个周期</p>
           <h2>周期概览</h2>
         </div>
+        <div class="analysis-verdict">
+          <div class="regularity-ring"><svg viewBox="0 0 80 80"><circle cx="40" cy="40" r="31"></circle><circle id="regularityArc" cx="40" cy="40" r="31"></circle></svg><strong id="regularityValue">--</strong></div>
+          <div><span>周期规律性</span><h3 id="analysisVerdict">等待更多记录</h3><p id="analysisCopy">至少记录三个周期后生成个人变化结论。</p></div>
+        </div>
         <div class="metrics" id="metrics"></div>
         <p class="prediction-note">日期预测仅根据历史记录估算，不用于避孕、诊断或治疗。</p>
         <div class="chart-section">
@@ -92,6 +112,14 @@
         <div class="symptom-section">
           <h3>常见症状</h3>
           <div class="symptom-summary" id="symptomSummary"></div>
+        </div>
+        <div class="change-section">
+          <h3>本周期变化</h3>
+          <div class="change-summary" id="changeSummary"></div>
+        </div>
+        <div class="flow-section">
+          <div class="section-row"><h3>经血量历史</h3><span>最近 6 次</span></div>
+          <div class="flow-history" id="flowHistory"></div>
         </div>
         <div class="history-section">
           <h3>历史记录</h3>
@@ -106,14 +134,17 @@
         </div>
         <div class="settings-list">
           <button class="settings-row" id="exportButton" type="button">
-            <span><strong>导出加密备份</strong><small id="backupStatus">使用密码保护 JSON 文件</small></span><b aria-hidden="true">↓</b>
+            <i data-lucide="file-lock-2" aria-hidden="true"></i><span><strong>导出加密备份</strong><small id="backupStatus">使用密码保护 JSON 文件</small></span><i data-lucide="download" aria-hidden="true"></i>
           </button>
           <label class="settings-row file-row" for="importInput">
-            <span><strong>恢复备份</strong><small>支持加密备份与第一版文件</small></span><b aria-hidden="true">↑</b>
+            <i data-lucide="file-up" aria-hidden="true"></i><span><strong>恢复备份</strong><small>支持加密备份与第一版文件</small></span><i data-lucide="upload" aria-hidden="true"></i>
           </label>
           <input id="importInput" type="file" accept="application/json,.json" hidden>
+          <button class="settings-row" id="calendarExportButton" type="button">
+            <i data-lucide="calendar-plus" aria-hidden="true"></i><span><strong>添加预计日期到日历</strong><small>导出系统日历事件，不上传数据</small></span><i data-lucide="chevron-right" aria-hidden="true"></i>
+          </button>
           <button class="settings-row danger-row" id="clearButton" type="button">
-            <span><strong>清除全部数据</strong><small>此操作无法撤销</small></span><b aria-hidden="true">×</b>
+            <i data-lucide="trash-2" aria-hidden="true"></i><span><strong>清除全部数据</strong><small>此操作无法撤销</small></span><i data-lucide="chevron-right" aria-hidden="true"></i>
           </button>
         </div>
         <div class="privacy-note">
@@ -124,10 +155,11 @@
     </main>
 
     <nav class="tabbar" aria-label="主导航">
-      <button class="tab active" id="todayTab" data-view="todayView" type="button"><span aria-hidden="true">●</span>今天</button>
-      <button class="tab" id="calendarTab" data-view="calendarView" type="button"><span aria-hidden="true">▦</span>日历</button>
-      <button class="tab" id="insightsTab" data-view="insightsView" type="button"><span aria-hidden="true">⌁</span>概览</button>
-      <button class="tab" id="settingsTab" data-view="settingsView" type="button"><span aria-hidden="true">⚙</span>设置</button>
+      <button class="tab active" id="todayTab" data-view="todayView" type="button"><i data-lucide="circle-dot"></i>今天</button>
+      <button class="tab" id="calendarTab" data-view="calendarView" type="button"><i data-lucide="calendar-days"></i>日历</button>
+      <button class="record-fab" id="recordFab" type="button" aria-label="记录今天" title="记录今天"><i data-lucide="plus"></i></button>
+      <button class="tab" id="insightsTab" data-view="insightsView" type="button"><i data-lucide="chart-no-axes-combined"></i>分析</button>
+      <button class="tab" id="settingsTab" data-view="settingsView" type="button"><i data-lucide="settings-2"></i>设置</button>
     </nav>
   </div>
 
@@ -135,8 +167,10 @@
     <form method="dialog" id="recordForm">
       <div class="dialog-header">
         <div><p class="eyebrow">每日记录</p><h2 id="recordDateTitle"></h2></div>
-        <button class="icon-button" value="cancel" aria-label="关闭" title="关闭" type="submit">×</button>
+        <button class="icon-button" value="cancel" aria-label="关闭" title="关闭" type="submit"><i data-lucide="x"></i></button>
       </div>
+
+      <div class="record-week-strip" id="recordWeekStrip" aria-label="选择记录日期"></div>
 
       <fieldset>
         <legend>经期</legend>
@@ -155,10 +189,40 @@
 
       <fieldset id="flowFieldset">
         <legend>流量</legend>
-        <div class="segmented three">
-          <label><input type="radio" name="flow" value="light"><span>少</span></label>
-          <label><input type="radio" name="flow" value="medium"><span>中</span></label>
-          <label><input type="radio" name="flow" value="heavy"><span>多</span></label>
+        <div class="state-options flow-options">
+          <label><input type="radio" name="flow" value="light"><span><i data-lucide="droplet"></i>少</span></label>
+          <label><input type="radio" name="flow" value="medium"><span><i data-lucide="droplets"></i>中</span></label>
+          <label><input type="radio" name="flow" value="heavy"><span><i data-lucide="waves"></i>多</span></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="body-state energy-state">
+        <legend>精力</legend>
+        <div class="state-options four-state">
+          <label><input type="radio" name="energy" value="exhausted"><span><i data-lucide="battery-warning"></i>耗尽</span></label>
+          <label><input type="radio" name="energy" value="low"><span><i data-lucide="battery-low"></i>疲倦</span></label>
+          <label><input type="radio" name="energy" value="normal"><span><i data-lucide="battery-medium"></i>正常</span></label>
+          <label><input type="radio" name="energy" value="high"><span><i data-lucide="battery-full"></i>充沛</span></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="body-state pain-state">
+        <legend>疼痛程度</legend>
+        <div class="state-options four-state">
+          <label><input type="radio" name="pain" value="none"><span><i data-lucide="smile"></i>无痛</span></label>
+          <label><input type="radio" name="pain" value="mild"><span><i data-lucide="minus"></i>轻微</span></label>
+          <label><input type="radio" name="pain" value="moderate"><span><i data-lucide="activity"></i>明显</span></label>
+          <label><input type="radio" name="pain" value="severe"><span><i data-lucide="triangle-alert"></i>严重</span></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="body-state mood-state">
+        <legend>情绪</legend>
+        <div class="state-options four-state">
+          <label><input type="radio" name="mood" value="low"><span><i data-lucide="cloud-rain"></i>低落</span></label>
+          <label><input type="radio" name="mood" value="calm"><span><i data-lucide="heart"></i>平静</span></label>
+          <label><input type="radio" name="mood" value="sensitive"><span><i data-lucide="waves"></i>敏感</span></label>
+          <label><input type="radio" name="mood" value="irritable"><span><i data-lucide="zap"></i>烦躁</span></label>
         </div>
       </fieldset>
 
@@ -198,7 +262,7 @@
     <form method="dialog" id="periodRangeForm">
       <div class="dialog-header">
         <div><p class="eyebrow">经期区间</p><h2 id="periodRangeTitle">记录一段经期</h2></div>
-        <button class="icon-button" value="cancel" aria-label="关闭" title="关闭" type="submit">×</button>
+        <button class="icon-button" value="cancel" aria-label="关闭" title="关闭" type="submit"><i data-lucide="x"></i></button>
       </div>
       <div class="date-range-fields">
         <label>开始日期<input id="periodStartInput" type="date" required></label>
@@ -246,6 +310,7 @@
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="app.js?v=3"></script>
+  <script src="vendor/lucide.min.js?v=4"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

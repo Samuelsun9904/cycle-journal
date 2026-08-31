@@ -29,11 +29,18 @@ const elements = {
   todayCycleLabel: document.querySelector("#todayCycleLabel"), todayStatus: document.querySelector("#todayStatus"),
   todayForecast: document.querySelector("#todayForecast"), confidenceBadge: document.querySelector("#confidenceBadge"),
   todayRecord: document.querySelector("#todayRecord"), backupReminder: document.querySelector("#backupReminder"),
+  ringProgress: document.querySelector("#ringProgress"), ringPeriod: document.querySelector("#ringPeriod"),
+  ringPrediction: document.querySelector("#ringPrediction"), ringPhase: document.querySelector("#ringPhase"),
+  ringDay: document.querySelector("#ringDay"), ringCaption: document.querySelector("#ringCaption"),
   backupStatus: document.querySelector("#backupStatus"), periodRangeDialog: document.querySelector("#periodRangeDialog"),
   periodStart: document.querySelector("#periodStartInput"), periodEnd: document.querySelector("#periodEndInput"),
   deletePeriodRange: document.querySelector("#deletePeriodRange"), backupDialog: document.querySelector("#backupDialog"),
   backupPassword: document.querySelector("#backupPassword"), backupPasswordConfirm: document.querySelector("#backupPasswordConfirm"),
-  backupError: document.querySelector("#backupError"), toast: document.querySelector("#toast")
+  backupError: document.querySelector("#backupError"), recordWeekStrip: document.querySelector("#recordWeekStrip"),
+  regularityArc: document.querySelector("#regularityArc"), regularityValue: document.querySelector("#regularityValue"),
+  analysisVerdict: document.querySelector("#analysisVerdict"), analysisCopy: document.querySelector("#analysisCopy"),
+  changeSummary: document.querySelector("#changeSummary"), flowHistory: document.querySelector("#flowHistory"),
+  toast: document.querySelector("#toast")
 };
 
 initialize();
@@ -45,6 +52,7 @@ function initialize() {
   renderSymptomOptions();
   bindEvents();
   render();
+  refreshIcons();
   persist();
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }));
@@ -69,6 +77,7 @@ function bindEvents() {
   elements.deleteRecord.addEventListener("click", deleteCurrentRecord);
   elements.editPeriodRange.addEventListener("click", editSelectedPeriodRange);
   document.querySelector("#logTodayButton").addEventListener("click", () => openRecordDialog(new Date()));
+  document.querySelector("#recordFab").addEventListener("click", () => openRecordDialog(new Date()));
   document.querySelector("#editTodayButton").addEventListener("click", () => openRecordDialog(new Date()));
   document.querySelector("#logPeriodRangeButton").addEventListener("click", () => openPeriodRangeDialog(new Date()));
   document.querySelector("#savePeriodRange").addEventListener("click", savePeriodRange);
@@ -77,6 +86,7 @@ function bindEvents() {
   elements.backupReminder.addEventListener("click", () => openBackupDialog("export"));
   document.querySelector("#confirmBackupAction").addEventListener("click", runBackupAction);
   document.querySelector("#importInput").addEventListener("change", importData);
+  document.querySelector("#calendarExportButton").addEventListener("click", exportPredictionCalendar);
   document.querySelector("#clearButton").addEventListener("click", () => document.querySelector("#confirmDialog").showModal());
   document.querySelector("#confirmClear").addEventListener("click", clearAllData);
 }
@@ -92,8 +102,12 @@ function loadStore() {
 }
 
 function normalizeRecord(record = {}) {
+  const allowed = (value, values) => values.includes(value) ? value : null;
   return {
     period: record.period || "none", flow: record.flow || null, spotting: Boolean(record.spotting),
+    energy: allowed(record.energy, ["exhausted", "low", "normal", "high"]),
+    pain: allowed(record.pain, ["none", "mild", "moderate", "severe"]),
+    mood: allowed(record.mood, ["low", "calm", "sensitive", "irritable"]),
     hadSex: Boolean(record.hadSex), protection: record.protection || null,
     symptoms: Array.isArray(record.symptoms) ? record.symptoms.filter(id => SYMPTOMS.some(item => item.id === id)) : [],
     customTags: Array.isArray(record.customTags) ? record.customTags.filter(Boolean) : [],
@@ -114,7 +128,10 @@ function isSameDay(a, b) { return dateKey(a) === dateKey(b); }
 function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
 
 function changeMonth(offset) { state.month = new Date(state.month.getFullYear(), state.month.getMonth() + offset, 1, 12); renderCalendar(); }
-function render() { renderToday(); renderCalendar(); renderInsights(); renderBackupStatus(); }
+function render() {
+  renderToday(); renderCalendar(); renderInsights(); renderBackupStatus();
+  queueMicrotask(refreshIcons);
+}
 
 function renderToday() {
   const today = new Date();
@@ -124,6 +141,7 @@ function renderToday() {
   const cycleDay = latestStart ? daysBetween(latestStart, today) + 1 : null;
   const periodSegment = findPeriodSegment(today);
   const prediction = calculatePrediction();
+  renderCycleRing(cycleDay, prediction, periodSegment);
   if (periodSegment) {
     elements.todayCycleLabel.textContent = `当前周期第 ${cycleDay || 1} 天`;
     elements.todayStatus.textContent = `经期第 ${daysBetween(periodSegment.start, today) + 1} 天`;
@@ -154,6 +172,39 @@ function renderToday() {
   elements.backupReminder.hidden = recordCount < 5 || (lastBackup && daysBetween(lastBackup, today) < 30);
 }
 
+function renderCycleRing(cycleDay, prediction, periodSegment) {
+  if (!cycleDay || !prediction || cycleDay < 1 || cycleDay > prediction.cycleLength + 14) {
+    setRingArc(elements.ringProgress, 0, 0);
+    setRingArc(elements.ringPeriod, 0, 0);
+    setRingArc(elements.ringPrediction, 0, 0);
+    elements.ringPhase.textContent = "等待记录";
+    elements.ringDay.textContent = "--";
+    elements.ringCaption.textContent = "周期日";
+    return;
+  }
+  const cycleLength = prediction.cycleLength;
+  const progress = clamp(cycleDay / cycleLength, 0, 1);
+  setRingArc(elements.ringProgress, 0, progress);
+  setRingArc(elements.ringPeriod, 0, clamp(prediction.periodLength / cycleLength, 0, 1));
+  const predictionStart = clamp((cycleLength - prediction.variation - 1) / cycleLength, 0, 1);
+  const predictionLength = clamp((prediction.variation * 2 + 1) / cycleLength, 0, 1 - predictionStart);
+  setRingArc(elements.ringPrediction, predictionStart, predictionLength);
+  const ovulationDay = Math.max(prediction.periodLength + 2, cycleLength - 14);
+  let phase = "卵泡期 · 估算";
+  if (periodSegment || cycleDay <= prediction.periodLength) phase = "经期";
+  else if (cycleDay >= ovulationDay - 2 && cycleDay <= ovulationDay + 2) phase = "排卵附近 · 估算";
+  else if (cycleDay > ovulationDay + 2) phase = "黄体期 · 估算";
+  elements.ringPhase.textContent = phase;
+  elements.ringDay.textContent = String(cycleDay);
+  elements.ringCaption.textContent = `约 ${cycleLength} 天周期`;
+}
+
+function setRingArc(circle, start, length) {
+  const circumference = 2 * Math.PI * 94;
+  circle.style.strokeDasharray = `${circumference * length} ${circumference * (1 - length)}`;
+  circle.style.strokeDashoffset = String(-circumference * start);
+}
+
 function predictionCountdown(prediction, today) {
   const days = daysBetween(today, prediction.start);
   if (days > 1) return `预计还有约 ${days} 天`;
@@ -167,6 +218,10 @@ function recordLabels(record) {
   if (record.period && record.period !== "none") labels.push("经期");
   if (record.spotting) labels.push("点滴出血");
   if (record.hadSex) labels.push("同房");
+  const energy = { exhausted: "精力耗尽", low: "有些疲倦", normal: "精力正常", high: "精力充沛" }[record.energy];
+  const pain = { none: "无痛", mild: "轻微疼痛", moderate: "明显疼痛", severe: "严重疼痛" }[record.pain];
+  const mood = { low: "情绪低落", calm: "情绪平静", sensitive: "较为敏感", irritable: "烦躁" }[record.mood];
+  if (energy) labels.push(energy); if (pain) labels.push(pain); if (mood) labels.push(mood);
   record.symptoms?.forEach(id => { const item = SYMPTOMS.find(symptom => symptom.id === id); if (item) labels.push(item.label); });
   labels.push(...(record.customTags || []));
   if (record.note) labels.push("有备注");
@@ -222,23 +277,44 @@ function renderSymptomOptions() {
 }
 
 function openRecordDialog(date) {
+  populateRecordForm(date);
+  if (!elements.recordDialog.open) elements.recordDialog.showModal();
+  queueMicrotask(refreshIcons);
+}
+
+function populateRecordForm(date) {
   state.selectedDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12);
   const record = state.records[dateKey(state.selectedDate)] || normalizeRecord();
   elements.recordDateTitle.textContent = new Intl.DateTimeFormat("zh-CN", {
     year: "numeric", month: "long", day: "numeric", weekday: "short"
   }).format(state.selectedDate);
   setRadio("period", record.period || "none"); setRadio("flow", record.flow || "medium");
+  setOptionalRadio("energy", record.energy); setOptionalRadio("pain", record.pain); setOptionalRadio("mood", record.mood);
   elements.spotting.checked = Boolean(record.spotting); elements.hadSex.checked = Boolean(record.hadSex);
   setRadio("protection", record.protection || "unknown");
   document.querySelectorAll('input[name="symptoms"]').forEach(input => { input.checked = record.symptoms.includes(input.value); });
   elements.customTags.value = record.customTags.join("、"); elements.note.value = record.note || "";
   elements.deleteRecord.hidden = !state.records[dateKey(state.selectedDate)];
   elements.editPeriodRange.hidden = !(record.period && record.period !== "none");
-  updateFormVisibility(); elements.recordDialog.showModal();
+  renderRecordWeekStrip(); updateFormVisibility();
 }
 
 function setRadio(name, value) { const input = document.querySelector(`input[name="${name}"][value="${value}"]`); if (input) input.checked = true; }
+function setOptionalRadio(name, value) {
+  document.querySelectorAll(`input[name="${name}"]`).forEach(input => { input.checked = input.value === value; });
+}
 function selectedRadio(name) { return document.querySelector(`input[name="${name}"]:checked`)?.value; }
+function renderRecordWeekStrip() {
+  elements.recordWeekStrip.replaceChildren();
+  for (let offset = -3; offset <= 3; offset += 1) {
+    const date = addDays(state.selectedDate, offset); const key = dateKey(date);
+    const button = document.createElement("button"); button.type = "button"; button.className = "record-week-day";
+    button.classList.toggle("selected", offset === 0); button.classList.toggle("has-data", Boolean(state.records[key]));
+    button.setAttribute("aria-label", formatLongDate(date));
+    button.innerHTML = `<span>${new Intl.DateTimeFormat("zh-CN", { weekday: "narrow" }).format(date)}</span><strong>${date.getDate()}</strong><i></i>`;
+    button.addEventListener("click", () => populateRecordForm(date)); elements.recordWeekStrip.append(button);
+  }
+}
 function updateFormVisibility() {
   elements.flowFieldset.hidden = selectedRadio("period") === "none";
   elements.protectionRow.hidden = !elements.hadSex.checked;
@@ -248,6 +324,7 @@ function saveCurrentRecord() {
   const key = dateKey(state.selectedDate); const period = selectedRadio("period");
   const record = normalizeRecord({
     period, flow: period === "none" ? null : selectedRadio("flow"), spotting: elements.spotting.checked,
+    energy: selectedRadio("energy"), pain: selectedRadio("pain"), mood: selectedRadio("mood"),
     hadSex: elements.hadSex.checked, protection: elements.hadSex.checked ? selectedRadio("protection") : null,
     symptoms: [...document.querySelectorAll('input[name="symptoms"]:checked')].map(input => input.value),
     customTags: parseTags(elements.customTags.value), note: elements.note.value.trim()
@@ -257,7 +334,7 @@ function saveCurrentRecord() {
 }
 function parseTags(value) { return [...new Set(value.split(/[，,、]/).map(item => item.trim()).filter(Boolean))].slice(0, 8); }
 function recordHasData(record) {
-  return Boolean((record.period && record.period !== "none") || record.spotting || record.hadSex || record.symptoms?.length || record.customTags?.length || record.note);
+  return Boolean((record.period && record.period !== "none") || record.spotting || record.energy || record.pain || record.mood || record.hadSex || record.symptoms?.length || record.customTags?.length || record.note);
 }
 function deleteCurrentRecord() {
   delete state.records[dateKey(state.selectedDate)]; persist(); elements.recordDialog.close(); render(); showToast("记录已删除");
@@ -361,13 +438,54 @@ function renderInsights() {
     [prediction?.confidenceLabel || "数据不足", "预测可信度"]
   ];
   elements.metrics.innerHTML = values.map(([value, label]) => `<div class="metric"><strong>${value}</strong><span>${label}</span></div>`).join("");
-  renderCycleChart(intervals.slice(-6)); renderSymptomSummary();
+  renderRegularity(intervals.slice(-6)); renderCycleChart(intervals.slice(-6)); renderSymptomSummary();
+  renderChangeSummary(intervals.slice(-6), lengths.slice(-6)); renderFlowHistory(starts.slice(-6));
   const recentStarts = starts.slice(-8).reverse();
   if (!recentStarts.length) { elements.historyList.innerHTML = '<div class="empty-state">尚无经期开始记录</div>'; return; }
   elements.historyList.innerHTML = recentStarts.map((date, index) => {
     const previous = recentStarts[index + 1]; const cycle = previous ? `${daysBetween(previous, date)} 天周期` : "首次记录";
     return `<div class="history-row"><div><strong>${formatLongDate(date)}</strong><span>经期开始</span></div><span>${cycle}</span></div>`;
   }).join("");
+}
+
+function renderRegularity(items) {
+  const values = items.map(item => item.days); const circumference = 2 * Math.PI * 31;
+  if (values.length < 2) {
+    elements.regularityArc.style.strokeDasharray = `0 ${circumference}`; elements.regularityValue.textContent = "--";
+    elements.analysisVerdict.textContent = "等待更多记录"; elements.analysisCopy.textContent = "至少记录三个周期后生成个人变化结论。"; return;
+  }
+  const deviation = standardDeviation(values); const score = clamp(Math.round(100 - deviation * 10), 0, 100);
+  const range = Math.max(...values) - Math.min(...values);
+  elements.regularityArc.style.strokeDasharray = `${circumference * score / 100} ${circumference}`;
+  elements.regularityValue.textContent = `${score}`;
+  elements.analysisVerdict.textContent = score >= 80 ? "整体较稳定" : score >= 60 ? "有一些波动" : "近期波动明显";
+  elements.analysisCopy.textContent = `最近周期在 ${Math.min(...values)}–${Math.max(...values)} 天之间，相差 ${range} 天。`;
+}
+
+function renderChangeSummary(intervals, lengths) {
+  const changes = [];
+  if (intervals.length >= 3) {
+    const latest = intervals.at(-1).days; const baseline = average(intervals.slice(0, -1).map(item => item.days)); const difference = Math.round(latest - baseline);
+    changes.push({ icon: difference === 0 ? "minus" : difference > 0 ? "trending-up" : "trending-down", title: `最近周期${difference === 0 ? "接近往常" : difference > 0 ? `长了约 ${difference} 天` : `短了约 ${Math.abs(difference)} 天`}`, copy: `本次 ${latest} 天，之前平均约 ${Math.round(baseline)} 天。` });
+  }
+  if (lengths.length >= 3) {
+    const latest = lengths.at(-1); const baseline = average(lengths.slice(0, -1)); const difference = Math.round(latest - baseline);
+    changes.push({ icon: "droplets", title: `最近经期持续 ${latest} 天`, copy: Math.abs(difference) < 1 ? "与此前记录接近。" : `比此前平均${difference > 0 ? "多" : "少"}约 ${Math.abs(difference)} 天。` });
+  }
+  if (!changes.length) { elements.changeSummary.innerHTML = '<div class="empty-state">记录至少三个周期后比较变化</div>'; return; }
+  elements.changeSummary.innerHTML = changes.map(item => `<div class="change-item"><i data-lucide="${item.icon}"></i><div><strong>${item.title}</strong><span>${item.copy}</span></div></div>`).join("");
+}
+
+function renderFlowHistory(starts) {
+  if (!starts.length) { elements.flowHistory.innerHTML = '<div class="empty-state">记录经期流量后显示历史</div>'; return; }
+  const rows = starts.slice().reverse().map(start => {
+    const cells = Array.from({ length: 7 }, (_, offset) => {
+      const record = state.records[dateKey(addDays(start, offset))]; const level = ["light", "medium", "heavy"].includes(record?.flow) ? record.flow : "empty";
+      return `<i class="flow-cell ${level}" title="第 ${offset + 1} 天"></i>`;
+    }).join("");
+    return `<div class="flow-row"><span>${formatShortDate(start)}</span><div class="flow-cells">${cells}</div></div>`;
+  }).join("");
+  elements.flowHistory.innerHTML = `${rows}<div class="flow-legend"><span><i class="light"></i>少</span><span><i class="medium"></i>中</span><span><i class="heavy"></i>多</span></div>`;
 }
 
 function renderCycleChart(items) {
@@ -467,17 +585,39 @@ async function deriveBackupKey(password, salt, usages, iterations = BACKUP_ITERA
 function bytesToBase64(bytes) { let binary = ""; bytes.forEach(byte => { binary += String.fromCharCode(byte); }); return btoa(binary); }
 function base64ToBytes(value) { const binary = atob(value); return Uint8Array.from(binary, character => character.charCodeAt(0)); }
 function downloadJson(value, filename) {
-  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob);
+  downloadText(JSON.stringify(value, null, 2), filename, "application/json");
+}
+function downloadText(value, filename, type) {
+  const blob = new Blob([value], { type }); const url = URL.createObjectURL(blob);
   const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+function exportPredictionCalendar() {
+  const prediction = calculatePrediction();
+  if (!prediction) { showToast("至少记录两次经期开始日期后才能导出"); return; }
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const start = calendarDate(prediction.startLower); const end = calendarDate(addDays(prediction.startUpper, 1));
+  const uid = `cycle-journal-${dateKey(prediction.start)}@local`;
+  const content = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Cycle Journal//ZH-CN", "CALSCALE:GREGORIAN",
+    "BEGIN:VEVENT", `UID:${uid}`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${start}`, `DTEND;VALUE=DATE:${end}`,
+    "SUMMARY:预计经期开始区间", "DESCRIPTION:根据本机历史记录估算，仅供记录参考，不用于避孕、诊断或治疗。",
+    "TRANSP:TRANSPARENT", "END:VEVENT", "END:VCALENDAR", ""
+  ].join("\r\n");
+  downloadText(content, `周期记-预计日期-${dateKey(prediction.start)}.ics`, "text/calendar;charset=utf-8");
+  showToast("日历文件已导出");
+}
+function calendarDate(date) { return dateKey(date).replaceAll("-", ""); }
 
 function clearAllData() { state.records = {}; state.settings = { lastBackupAt: null }; persist(); render(); showToast("全部数据已清除"); }
 function showView(viewId) {
   document.querySelectorAll(".view").forEach(view => view.classList.toggle("active", view.id === viewId));
   document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab.dataset.view === viewId));
   if (viewId === "insightsView") renderInsights(); if (viewId === "todayView") renderToday();
+  queueMicrotask(refreshIcons);
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
+function refreshIcons() { if (window.lucide) window.lucide.createIcons(); }
 let toastTimer;
 function showToast(message) {
   clearTimeout(toastTimer); elements.toast.textContent = message; elements.toast.classList.add("show");
