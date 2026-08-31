@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7f7f5">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="周期记">
+  <title>周期记</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow" id="todayLabel"></p>
+        <h1>周期记</h1>
+      </div>
+      <button class="icon-button" id="todayButton" type="button" aria-label="回到今天" title="回到今天">
+        <span aria-hidden="true">今</span>
+      </button>
+    </header>
+
+    <main>
+      <section class="view active" id="calendarView" aria-labelledby="calendarTab">
+        <div class="month-toolbar">
+          <button class="icon-button" id="previousMonth" type="button" aria-label="上个月" title="上个月">‹</button>
+          <div class="month-title">
+            <span id="monthTitle"></span>
+            <span class="month-subtitle" id="cycleSummary"></span>
+          </div>
+          <button class="icon-button" id="nextMonth" type="button" aria-label="下个月" title="下个月">›</button>
+        </div>
+
+        <div class="weekdays" aria-hidden="true">
+          <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+        </div>
+        <div class="calendar-grid" id="calendarGrid" role="grid" aria-label="月历"></div>
+
+        <div class="legend" aria-label="日历标记说明">
+          <span><i class="legend-period"></i>经期</span>
+          <span><i class="legend-sex"></i>同房</span>
+          <span><i class="legend-predicted"></i>预计</span>
+        </div>
+      </section>
+
+      <section class="view" id="insightsView" aria-labelledby="insightsTab">
+        <div class="section-heading">
+          <p class="eyebrow">近 6 个周期</p>
+          <h2>周期概览</h2>
+        </div>
+        <div class="metrics" id="metrics"></div>
+        <p class="prediction-note">日期预测仅根据历史记录估算，不用于避孕、诊断或治疗。</p>
+        <div class="history-section">
+          <h3>历史记录</h3>
+          <div class="history-list" id="historyList"></div>
+        </div>
+      </section>
+
+      <section class="view" id="settingsView" aria-labelledby="settingsTab">
+        <div class="section-heading">
+          <p class="eyebrow">仅保存在当前设备</p>
+          <h2>数据管理</h2>
+        </div>
+        <div class="settings-list">
+          <button class="settings-row" id="exportButton" type="button">
+            <span><strong>导出备份</strong><small>保存为 JSON 文件</small></span><b aria-hidden="true">↓</b>
+          </button>
+          <label class="settings-row file-row" for="importInput">
+            <span><strong>恢复备份</strong><small>从 JSON 文件导入</small></span><b aria-hidden="true">↑</b>
+          </label>
+          <input id="importInput" type="file" accept="application/json,.json" hidden>
+          <button class="settings-row danger-row" id="clearButton" type="button">
+            <span><strong>清除全部数据</strong><small>此操作无法撤销</small></span><b aria-hidden="true">×</b>
+          </button>
+        </div>
+        <div class="privacy-note">
+          <strong>隐私</strong>
+          <p>应用不上传记录，也不包含广告或统计代码。</p>
+        </div>
+      </section>
+    </main>
+
+    <nav class="tabbar" aria-label="主导航">
+      <button class="tab active" id="calendarTab" data-view="calendarView" type="button"><span aria-hidden="true">▦</span>日历</button>
+      <button class="tab" id="insightsTab" data-view="insightsView" type="button"><span aria-hidden="true">⌁</span>概览</button>
+      <button class="tab" id="settingsTab" data-view="settingsView" type="button"><span aria-hidden="true">⚙</span>设置</button>
+    </nav>
+  </div>
+
+  <dialog id="recordDialog">
+    <form method="dialog" id="recordForm">
+      <div class="dialog-header">
+        <div><p class="eyebrow">每日记录</p><h2 id="recordDateTitle"></h2></div>
+        <button class="icon-button" value="cancel" aria-label="关闭" title="关闭" type="submit">×</button>
+      </div>
+
+      <fieldset>
+        <legend>经期</legend>
+        <div class="segmented four" id="periodOptions">
+          <label><input type="radio" name="period" value="none" checked><span>无</span></label>
+          <label><input type="radio" name="period" value="start"><span>开始</span></label>
+          <label><input type="radio" name="period" value="ongoing"><span>进行中</span></label>
+          <label><input type="radio" name="period" value="end"><span>结束</span></label>
+        </div>
+      </fieldset>
+
+      <fieldset id="flowFieldset">
+        <legend>流量</legend>
+        <div class="segmented three">
+          <label><input type="radio" name="flow" value="light"><span>少</span></label>
+          <label><input type="radio" name="flow" value="medium"><span>中</span></label>
+          <label><input type="radio" name="flow" value="heavy"><span>多</span></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>同房</legend>
+        <label class="switch-row">
+          <span>当天有记录</span>
+          <input id="hadSexInput" type="checkbox" role="switch">
+        </label>
+        <div class="protection-row" id="protectionRow">
+          <span>保护措施</span>
+          <div class="segmented three compact">
+            <label><input type="radio" name="protection" value="yes"><span>有</span></label>
+            <label><input type="radio" name="protection" value="no"><span>无</span></label>
+            <label><input type="radio" name="protection" value="unknown"><span>不记</span></label>
+          </div>
+        </div>
+      </fieldset>
+
+      <label class="note-field">备注<textarea id="noteInput" maxlength="200" rows="3" placeholder="可选"></textarea></label>
+      <div class="dialog-actions">
+        <button class="text-button danger" id="deleteRecord" type="button">删除记录</button>
+        <button class="primary-button" id="saveRecord" type="button">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="confirm-dialog" id="confirmDialog">
+    <form method="dialog">
+      <h2>清除全部数据？</h2>
+      <p>所有日期记录将从当前设备永久删除。</p>
+      <div class="dialog-actions">
+        <button class="text-button" value="cancel">取消</button>
+        <button class="primary-button danger-fill" id="confirmClear" value="default">确认清除</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
