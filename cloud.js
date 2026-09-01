@@ -29,8 +29,10 @@
     if (!configured) {
       setStatus("云同步尚未配置", "idle");
       ui.signedOut.hidden = false;
-      ui.sendLogin.disabled = true;
+      ui.signIn.disabled = true;
+      ui.register.disabled = true;
       ui.email.disabled = true;
+      ui.password.disabled = true;
       ui.error.textContent = "需要先填写 Supabase 项目地址和公开密钥。";
       return;
     }
@@ -46,7 +48,9 @@
     ui.signedOut = document.querySelector("#signedOutSync");
     ui.signedIn = document.querySelector("#signedInSync");
     ui.email = document.querySelector("#syncEmailInput");
-    ui.sendLogin = document.querySelector("#sendLoginLinkButton");
+    ui.password = document.querySelector("#syncPasswordInput");
+    ui.signIn = document.querySelector("#signInButton");
+    ui.register = document.querySelector("#registerButton");
     ui.accountEmail = document.querySelector("#syncAccountEmail");
     ui.role = document.querySelector("#syncRoleLabel");
     ui.noCouple = document.querySelector("#noCoupleActions");
@@ -60,7 +64,9 @@
     ui.status = document.querySelector("#syncStatus");
     ui.indicator = document.querySelector("#syncIndicator");
     ui.error = document.querySelector("#syncError");
-    ui.sendLogin.addEventListener("click", sendLoginLink);
+    ui.signIn.addEventListener("click", signInWithPassword);
+    ui.register.addEventListener("click", registerWithPassword);
+    ui.password.addEventListener("keydown", event => { if (event.key === "Enter") signInWithPassword(); });
     document.querySelector("#signOutButton").addEventListener("click", () => client.auth.signOut());
     document.querySelector("#createCoupleButton").addEventListener("click", createCouple);
     document.querySelector("#joinCoupleButton").addEventListener("click", joinCouple);
@@ -68,17 +74,36 @@
     ui.copy.addEventListener("click", copyInvite);
   }
 
-  async function sendLoginLink() {
+  function authFields() {
     clearError();
     const email = ui.email.value.trim();
-    if (!/^\S+@\S+\.\S+$/.test(email)) { ui.error.textContent = "请输入有效的邮箱地址。"; return; }
-    ui.sendLogin.disabled = true;
-    const redirect = `${location.origin}${location.pathname}`;
-    const { error } = await client.auth.signInWithOtp({ email, options: { emailRedirectTo: redirect } });
-    ui.sendLogin.disabled = false;
-    if (error) { setError(error); return; }
-    setStatus("登录邮件已发送，请检查邮箱", "ready");
-    app.notify("登录邮件已发送");
+    const password = ui.password.value;
+    if (!/^\S+@\S+\.\S+$/.test(email)) { ui.error.textContent = "请输入有效的邮箱地址。"; return null; }
+    if (password.length < 8) { ui.error.textContent = "密码至少需要 8 位。"; return null; }
+    return { email, password };
+  }
+
+  async function signInWithPassword() {
+    const fields = authFields(); if (!fields) return;
+    ui.signIn.disabled = true; ui.register.disabled = true;
+    const { error } = await client.auth.signInWithPassword(fields);
+    ui.signIn.disabled = false; ui.register.disabled = false;
+    if (error) { ui.error.textContent = "邮箱或密码不正确；第一次使用请点“首次注册”。"; return; }
+    app.notify("登录成功");
+  }
+
+  async function registerWithPassword() {
+    const fields = authFields(); if (!fields) return;
+    ui.signIn.disabled = true; ui.register.disabled = true;
+    const { data, error } = await client.auth.signUp(fields);
+    ui.signIn.disabled = false; ui.register.disabled = false;
+    if (error || !data.session) {
+      ui.error.textContent = /already|registered/i.test(error?.message || "")
+        ? "该邮箱已经注册，请直接登录。"
+        : "注册未完成，请稍后重试。";
+      return;
+    }
+    app.notify("注册并登录成功");
   }
 
   async function applySession(nextSession) {

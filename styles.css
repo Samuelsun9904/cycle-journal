@@ -283,11 +283,15 @@ textarea { resize: vertical; }
 .sync-indicator[data-state="ready"] { background: #13866f; box-shadow: 0 0 0 4px #e2f2ed; }
 .sync-indicator[data-state="syncing"] { background: #d59b22; animation: sync-pulse 1s ease-in-out infinite; }
 .sync-indicator[data-state="error"] { background: #c53f4f; }
-.sync-email-field { display: block; color: var(--muted); font-size: 11px; font-weight: 700; }
-.sync-email-field input, .join-row input { width: 100%; min-height: 43px; margin-top: 6px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 6px; background: #fbfcfb; color: var(--ink); }
+.sync-email-field, .sync-password-field { display: block; color: var(--muted); font-size: 11px; font-weight: 700; }
+.sync-password-field { margin-top: 10px; }
+.sync-email-field input, .sync-password-field input, .join-row input { width: 100%; min-height: 43px; margin-top: 6px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 6px; background: #fbfcfb; color: var(--ink); }
 .sync-action { width: 100%; min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 12px; }
 .sync-action svg { width: 17px; height: 17px; }
 .sync-note { margin: 11px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.auth-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.auth-actions button { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; }
+.auth-actions svg { width: 17px; height: 17px; }
 .account-row { min-height: 49px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
 .account-row strong, .account-row small { display: block; overflow-wrap: anywhere; }
 .account-row strong { font-size: 13px; }

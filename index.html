@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=7">
+  <link rel="stylesheet" href="styles.css?v=8">
 </head>
 <body>
   <div class="app-shell">
@@ -162,8 +162,9 @@
           </div>
           <div id="signedOutSync">
             <label class="sync-email-field">邮箱地址<input id="syncEmailInput" type="email" autocomplete="email" inputmode="email" placeholder="name@example.com"></label>
-            <button class="primary-button sync-action" id="sendLoginLinkButton" type="button"><i data-lucide="mail"></i>发送登录邮件</button>
-            <p class="sync-note">在邮件中点击登录链接即可。以后版本更新会保留登录状态，换设备时用同一邮箱登录即可恢复。</p>
+            <label class="sync-password-field">密码<input id="syncPasswordInput" type="password" minlength="8" autocomplete="current-password" placeholder="至少 8 位"></label>
+            <div class="auth-actions"><button class="primary-button" id="signInButton" type="button"><i data-lucide="log-in"></i>登录</button><button class="secondary-button" id="registerButton" type="button">首次注册</button></div>
+            <p class="sync-note">第一次使用点“首次注册”，以后直接登录。版本更新会保留登录状态，不需要打开邮箱链接。</p>
           </div>
           <div id="signedInSync" hidden>
             <div class="account-row"><span><strong id="syncAccountEmail"></strong><small id="syncRoleLabel">尚未加入伴侣空间</small></span><button class="text-button" id="signOutButton" type="button">退出</button></div>
@@ -397,10 +398,10 @@
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="vendor/lucide.min.js?v=7"></script>
-  <script src="vendor/supabase.min.js?v=7"></script>
-  <script src="config.js?v=7"></script>
-  <script src="cloud.js?v=7"></script>
-  <script src="app.js?v=7"></script>
+  <script src="vendor/lucide.min.js?v=8"></script>
+  <script src="vendor/supabase.min.js?v=8"></script>
+  <script src="config.js?v=8"></script>
+  <script src="cloud.js?v=8"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>
