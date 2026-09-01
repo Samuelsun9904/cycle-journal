@@ -1,6 +1,6 @@
 # 周期记
 
-一个本地优先的生理周期记录 PWA。记录仅保存在当前浏览器中，应用不包含账号、广告或统计代码。
+一个本地优先的生理周期记录 PWA。未登录时记录保存在当前设备；配置 Supabase 后可使用邮箱登录，在记录者与只读伴侣之间实时同步。
 
 ## 功能
 
@@ -13,9 +13,20 @@
 - 经血量历史与系统日历事件导出
 - 浏览器预计经期提醒与带闹钟的系统日历提醒
 - 本机伴侣资料、分享范围控制和 PNG 摘要生成
+- 表单草稿自动恢复、localStorage 与 IndexedDB 双重本机快照
+- 邮箱免密码登录、一次性伴侣邀请码和实时双机同步
 - AES-GCM 加密备份，并兼容第一版 JSON 文件
 - 离线使用和 iPhone 主屏幕安装
 
 界面图标使用本地打包的 Lucide，离线状态也可正常显示。
 
 日期预测仅根据历史记录估算，不用于避孕、诊断或治疗。
+
+## 启用实时同步
+
+1. 创建 Supabase 项目，在 SQL Editor 中完整运行 `supabase-schema.sql`。
+2. 在项目的 Auth URL Configuration 中，把 GitHub Pages 地址加入 Redirect URLs。
+3. 从项目 Connect 页面复制 Project URL 和 Publishable key，填入 `config.js`。
+4. 不要把 Secret key 或 service role key 放入前端代码。
+
+记录者登录后创建空间，应用会把现有本机记录首次上传；伴侣用自己的邮箱登录并输入邀请码后，只能读取记录。数据库 RLS 负责在服务端执行写入权限。

@@ -1,4 +1,6 @@
 const STORAGE_KEY = "cycle-journal-v1";
+const DRAFT_KEY = "cycle-journal-drafts-v1";
+const SNAPSHOT_DB = "cycle-journal-storage";
 const BACKUP_ITERATIONS = 250000;
 const SYMPTOMS = [
   { id: "bloating", label: "腹胀" }, { id: "acne", label: "痘痘" },
@@ -21,7 +23,7 @@ const stored = loadStore();
 const state = {
   month: startOfMonth(new Date()), selectedDate: null, records: stored.records,
   settings: stored.settings, calendarFilter: "all", periodRangeOriginal: null,
-  pendingImport: null, backupMode: "export", sexCount: 0, partnerSummaryBlob: null
+  pendingImport: null, backupMode: "export", sexCount: 0, partnerSummaryBlob: null, cloudRole: "local"
 };
 
 const elements = {
@@ -63,7 +65,7 @@ const elements = {
 
 initialize();
 
-function initialize() {
+async function initialize() {
   document.querySelector("#todayLabel").textContent = new Intl.DateTimeFormat("zh-CN", {
     month: "long", day: "numeric", weekday: "long"
   }).format(new Date());
@@ -71,9 +73,18 @@ function initialize() {
   bindEvents();
   render();
   refreshIcons();
-  persist();
+  await recoverIndexedSnapshot();
+  window.CloudSync?.initialize({
+    getSnapshot: () => ({ records: state.records }),
+    replaceRecords,
+    onRoleChange: applyCloudRole,
+    notify: showToast
+  });
   if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }));
+    window.addEventListener("load", async () => {
+      await navigator.serviceWorker.register("sw.js", { updateViaCache: "none" });
+      navigator.serviceWorker.addEventListener("controllerchange", () => showToast("新版本已就绪，下次打开生效"));
+    });
   }
   window.addEventListener("load", checkPredictionReminder);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) checkPredictionReminder(); });
@@ -93,6 +104,8 @@ function bindEvents() {
   }));
   document.querySelectorAll('input[name="period"]').forEach(input => input.addEventListener("change", updateFormVisibility));
   document.querySelectorAll('input[name="pain"]').forEach(input => input.addEventListener("change", syncPainSelection));
+  document.querySelector("#recordForm").addEventListener("input", saveRecordDraft);
+  document.querySelector("#recordForm").addEventListener("change", saveRecordDraft);
   document.querySelector("#decreaseSexCount").addEventListener("click", () => changeSexCount(-1));
   document.querySelector("#increaseSexCount").addEventListener("click", () => changeSexCount(1));
   document.querySelector("#saveRecord").addEventListener("click", saveCurrentRecord);
@@ -152,7 +165,66 @@ function normalizeRecord(record = {}) {
   };
 }
 
-function persist() { localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, records: state.records, settings: state.settings })); }
+function persist(options = {}) {
+  const snapshot = { version: 3, records: state.records, settings: state.settings };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+  saveIndexedSnapshot(snapshot);
+  if (options.cloud !== false) window.CloudSync?.schedulePush();
+}
+
+function openSnapshotDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(SNAPSHOT_DB, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("snapshots");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveIndexedSnapshot(snapshot) {
+  try {
+    const db = await openSnapshotDb();
+    const transaction = db.transaction("snapshots", "readwrite");
+    transaction.objectStore("snapshots").put(snapshot, "latest");
+    transaction.oncomplete = () => db.close();
+  } catch (error) { console.warn("IndexedDB snapshot failed", error); }
+}
+
+async function recoverIndexedSnapshot() {
+  try {
+    const db = await openSnapshotDb();
+    const snapshot = await new Promise((resolve, reject) => {
+      const request = db.transaction("snapshots").objectStore("snapshots").get("latest");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+    if (!Object.keys(state.records).length && snapshot?.records && Object.keys(snapshot.records).length) {
+      state.records = normalizeRecords(snapshot.records);
+      state.settings = { ...DEFAULT_SETTINGS, ...(snapshot.settings || {}) };
+      persist({ cloud: false }); render(); showToast("已从设备快照恢复记录");
+    } else if (!snapshot) saveIndexedSnapshot({ version: 3, records: state.records, settings: state.settings });
+  } catch (error) { console.warn("IndexedDB recovery failed", error); }
+}
+
+function normalizeRecords(records) {
+  return Object.fromEntries(Object.entries(records || {}).map(([key, record]) => [key, normalizeRecord(record)]));
+}
+
+async function replaceRecords(records) {
+  state.records = normalizeRecords(records);
+  persist({ cloud: false }); render();
+}
+
+function applyCloudRole(role) {
+  state.cloudRole = role;
+  const readOnly = role === "partner";
+  document.body.classList.toggle("partner-readonly", readOnly);
+  ["#logTodayButton", "#logPeriodRangeButton", "#recordFab", "#editTodayButton", "#clearButton"].forEach(selector => {
+    const button = document.querySelector(selector); if (button) button.disabled = readOnly;
+  });
+  if (readOnly && elements.recordDialog.open) elements.recordDialog.close();
+}
 function dateKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
@@ -370,6 +442,7 @@ function renderPainTypeOptions() {
 }
 
 function openRecordDialog(date) {
+  if (state.cloudRole === "partner") { showToast("伴侣账号只能查看记录"); return; }
   populateRecordForm(date);
   if (!elements.recordDialog.open) elements.recordDialog.showModal();
   queueMicrotask(refreshIcons);
@@ -377,7 +450,9 @@ function openRecordDialog(date) {
 
 function populateRecordForm(date) {
   state.selectedDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12);
-  const record = state.records[dateKey(state.selectedDate)] || normalizeRecord();
+  const key = dateKey(state.selectedDate);
+  const draft = loadRecordDraft(key);
+  const record = draft || state.records[key] || normalizeRecord();
   elements.recordDateTitle.textContent = new Intl.DateTimeFormat("zh-CN", {
     year: "numeric", month: "long", day: "numeric", weekday: "short"
   }).format(state.selectedDate);
@@ -391,6 +466,7 @@ function populateRecordForm(date) {
   elements.deleteRecord.hidden = !state.records[dateKey(state.selectedDate)];
   elements.editPeriodRange.hidden = !(record.period && record.period !== "none");
   renderRecordWeekStrip(); updateFormVisibility();
+  if (draft) showToast("已恢复这一天的未保存内容");
 }
 
 function setRadio(name, value) { const input = document.querySelector(`input[name="${name}"][value="${value}"]`); if (input) input.checked = true; }
@@ -398,7 +474,7 @@ function setOptionalRadio(name, value) {
   document.querySelectorAll(`input[name="${name}"]`).forEach(input => { input.checked = input.value === value; });
 }
 function selectedRadio(name) { return document.querySelector(`input[name="${name}"]:checked`)?.value; }
-function changeSexCount(offset) { state.sexCount = clamp(state.sexCount + offset, 0, 9); renderSexCount(); updateFormVisibility(); }
+function changeSexCount(offset) { state.sexCount = clamp(state.sexCount + offset, 0, 9); renderSexCount(); updateFormVisibility(); saveRecordDraft(); }
 function renderSexCount() {
   elements.sexCountValue.textContent = String(state.sexCount);
   document.querySelector("#decreaseSexCount").disabled = state.sexCount === 0;
@@ -423,9 +499,9 @@ function updateFormVisibility() {
   elements.protectionRow.hidden = state.sexCount === 0;
 }
 
-function saveCurrentRecord() {
-  const key = dateKey(state.selectedDate); const period = selectedRadio("period");
-  const record = normalizeRecord({
+function collectRecordForm() {
+  const period = selectedRadio("period");
+  return normalizeRecord({
     period, flow: period === "none" ? null : selectedRadio("flow"), spotting: elements.spotting.checked,
     energy: selectedRadio("energy"), pain: selectedRadio("pain"), mood: selectedRadio("mood"),
     painTypes: selectedRadio("pain") === "none" ? [] : [...document.querySelectorAll('input[name="painTypes"]:checked')].map(input => input.value),
@@ -433,15 +509,36 @@ function saveCurrentRecord() {
     symptoms: [...document.querySelectorAll('input[name="symptoms"]:checked')].map(input => input.value),
     customTags: parseTags(elements.customTags.value), note: elements.note.value.trim()
   });
+}
+
+function loadDrafts() {
+  try { return JSON.parse(localStorage.getItem(DRAFT_KEY)) || {}; }
+  catch { return {}; }
+}
+
+function loadRecordDraft(key) { return loadDrafts()[key] ? normalizeRecord(loadDrafts()[key]) : null; }
+
+function saveRecordDraft() {
+  if (!state.selectedDate || !elements.recordDialog.open) return;
+  const drafts = loadDrafts(); drafts[dateKey(state.selectedDate)] = collectRecordForm();
+  localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts));
+}
+
+function clearRecordDraft(key) {
+  const drafts = loadDrafts(); delete drafts[key]; localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts));
+}
+
+function saveCurrentRecord() {
+  const key = dateKey(state.selectedDate); const record = collectRecordForm();
   if (recordHasData(record)) state.records[key] = record; else delete state.records[key];
-  persist(); elements.recordDialog.close(); render(); showToast("已保存");
+  clearRecordDraft(key); persist(); elements.recordDialog.close(); render(); showToast("已保存");
 }
 function parseTags(value) { return [...new Set(value.split(/[，,、]/).map(item => item.trim()).filter(Boolean))].slice(0, 8); }
 function recordHasData(record) {
   return Boolean((record.period && record.period !== "none") || record.spotting || record.energy || record.pain || record.mood || record.painTypes?.length || record.sexCount || record.symptoms?.length || record.customTags?.length || record.note);
 }
 function deleteCurrentRecord() {
-  delete state.records[dateKey(state.selectedDate)]; persist(); elements.recordDialog.close(); render(); showToast("记录已删除");
+  const key = dateKey(state.selectedDate); delete state.records[key]; clearRecordDraft(key); persist(); elements.recordDialog.close(); render(); showToast("记录已删除");
 }
 
 function editSelectedPeriodRange() {
@@ -462,6 +559,7 @@ function findPeriodSegment(date) {
   return { start, end };
 }
 function openPeriodRangeDialog(start, end = addDays(start, 4)) {
+  if (state.cloudRole === "partner") { showToast("伴侣账号只能查看记录"); return; }
   const existing = findPeriodSegment(start); state.periodRangeOriginal = existing;
   elements.periodStart.value = dateKey(existing?.start || start); elements.periodEnd.value = dateKey(existing?.end || end);
   document.querySelector("#periodRangeTitle").textContent = existing ? "编辑整段经期" : "记录一段经期";
@@ -761,11 +859,13 @@ function buildPartnerSummaryData() {
   record?.painTypes?.forEach(id => { const item = PAIN_TYPES.find(type => type.id === id); if (item) body.push(item.label); });
   record?.symptoms?.forEach(id => { const item = SYMPTOMS.find(symptom => symptom.id === id); if (item) body.push(item.label); });
   const mood = { low: "情绪有些低落", calm: "情绪比较平静", sensitive: "今天比较敏感", irritable: "今天有些烦躁" }[record?.mood];
+  const intimacy = record?.sexCount ? `同房 ${record.sexCount} 次，保护措施：${{ all: "全部有", partial: "部分有", none: "均无", unknown: "未记录" }[record.protection] || "未记录"}` : "今天没有同房记录";
+  const notes = [record?.customTags?.length ? `标签：${record.customTags.join("、")}` : "", record?.note ? `备注：${record.note}` : ""].filter(Boolean).join("；") || "今天没有标签或备注";
   return {
     partnerName: state.settings.partnerName || "亲爱的", message: state.settings.partnerMessage || "这是我今天的周期状态，希望我们都更了解身体的变化。",
     date: formatLongDate(today), cycleStatus,
     forecast: prediction ? `下次经期预计在 ${formatRange(prediction.startLower, prediction.startUpper)} 开始` : "继续记录后会显示预计日期",
-    body: body.length ? `${body.slice(0, 6).join(" · ")}${body.length > 6 ? ` · 共 ${body.length} 项` : ""}` : "今天暂未记录身体感受", mood: mood || "今天暂未记录情绪",
+    body: body.length ? `${body.slice(0, 6).join(" · ")}${body.length > 6 ? ` · 共 ${body.length} 项` : ""}` : "今天暂未记录身体感受", mood: mood || "今天暂未记录情绪", intimacy, notes,
     shareCycle: state.settings.partnerShareCycle !== false, shareBody: state.settings.partnerShareBody !== false,
     shareMood: state.settings.partnerShareMood !== false
   };
@@ -792,6 +892,7 @@ function renderPartnerSummaryPreview(data) {
   if (data.shareCycle) appendSummaryPreviewSection(preview, "calendar-heart", "周期", data.cycleStatus, data.forecast);
   if (data.shareBody) appendSummaryPreviewSection(preview, "activity", "身体感受", data.body, "感受来自今天的主动记录");
   if (data.shareMood) appendSummaryPreviewSection(preview, "heart", "情绪", data.mood, "陪伴和理解就很好");
+  appendSummaryPreviewSection(preview, "lock-keyhole", "亲密与备注", data.intimacy, data.notes);
   const footer = document.createElement("small"); footer.className = "summary-preview-footer"; footer.textContent = "仅供彼此了解，不作为医学判断"; preview.append(footer);
 }
 
@@ -804,7 +905,7 @@ function appendSummaryPreviewSection(container, icon, label, value, copy) {
 }
 
 async function createPartnerSummaryBlob(data) {
-  const canvas = document.createElement("canvas"); canvas.width = 1080; canvas.height = 1440;
+  const canvas = document.createElement("canvas"); canvas.width = 1080; canvas.height = 1680;
   const context = canvas.getContext("2d"); context.fillStyle = "#f2f6f4"; context.fillRect(0, 0, canvas.width, canvas.height);
   context.fillStyle = "#087f6b"; context.fillRect(0, 0, canvas.width, 210);
   context.fillStyle = "#ffffff"; context.font = "700 46px sans-serif"; context.fillText("周期记", 72, 92);
@@ -815,8 +916,10 @@ async function createPartnerSummaryBlob(data) {
   if (data.shareCycle) y = drawSummaryCanvasSection(context, y, "周期", data.cycleStatus, data.forecast, "#d83f5b", "#fde7eb");
   if (data.shareBody) y = drawSummaryCanvasSection(context, y, "身体感受", data.body, "感受来自今天的主动记录", "#4b64ad", "#e8ecfa");
   if (data.shareMood) y = drawSummaryCanvasSection(context, y, "情绪", data.mood, "陪伴和理解就很好", "#9b4d7d", "#f3dfeb");
-  context.strokeStyle = "#dce3df"; context.beginPath(); context.moveTo(72, 1330); context.lineTo(1008, 1330); context.stroke();
-  context.fillStyle = "#65716d"; context.font = "400 25px sans-serif"; context.fillText("同房记录、备注和自定义标签未包含在此摘要中", 72, 1380);
+  y = drawSummaryCanvasSection(context, y, "亲密与备注", data.intimacy, data.notes, "#087f6b", "#dff2ed");
+  const footerY = Math.min(1620, y + 20);
+  context.strokeStyle = "#dce3df"; context.beginPath(); context.moveTo(72, footerY - 42); context.lineTo(1008, footerY - 42); context.stroke();
+  context.fillStyle = "#65716d"; context.font = "400 25px sans-serif"; context.fillText("仅供彼此了解，不作为医学判断", 72, footerY);
   return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("canvas")), "image/png"));
 }
 

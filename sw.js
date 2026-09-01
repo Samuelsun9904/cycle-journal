@@ -1,10 +1,13 @@
-const CACHE_NAME = "cycle-journal-v6";
+const CACHE_NAME = "cycle-journal-v7";
 const ASSETS = [
   "./",
   "index.html",
-  "styles.css?v=6",
-  "app.js?v=6",
-  "vendor/lucide.min.js?v=6",
+  "styles.css?v=7",
+  "app.js?v=7",
+  "cloud.js?v=7",
+  "config.js?v=7",
+  "vendor/lucide.min.js?v=7",
+  "vendor/supabase.min.js?v=7",
   "vendor/LUCIDE-LICENSE",
   "manifest.webmanifest",
   "icons/icon-192.png",
@@ -19,13 +22,8 @@ self.addEventListener("install", event => {
 self.addEventListener("activate", event => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
-    const hadPreviousVersion = keys.some(key => key.startsWith("cycle-journal-") && key !== CACHE_NAME);
     await Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key)));
     await self.clients.claim();
-    if (hadPreviousVersion) {
-      const windows = await self.clients.matchAll({ type: "window" });
-      await Promise.all(windows.map(client => client.navigate(client.url)));
-    }
   })());
 });
 

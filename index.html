@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=6">
+  <link rel="stylesheet" href="styles.css?v=7">
 </head>
 <body>
   <div class="app-shell">
@@ -154,6 +154,31 @@
           </div>
           <p class="reminder-note">网页关闭后，系统日历提醒更可靠；导出的预计日期会自动带提醒。</p>
         </div>
+        <div class="sync-panel" id="syncPanel">
+          <div class="sync-heading">
+            <span class="setting-icon"><i data-lucide="cloud"></i></span>
+            <div><strong>双人实时同步</strong><small id="syncStatus">正在检查登录状态</small></div>
+            <span class="sync-indicator" id="syncIndicator" aria-hidden="true"></span>
+          </div>
+          <div id="signedOutSync">
+            <label class="sync-email-field">邮箱地址<input id="syncEmailInput" type="email" autocomplete="email" inputmode="email" placeholder="name@example.com"></label>
+            <button class="primary-button sync-action" id="sendLoginLinkButton" type="button"><i data-lucide="mail"></i>发送登录邮件</button>
+            <p class="sync-note">在邮件中点击登录链接即可。以后版本更新会保留登录状态，换设备时用同一邮箱登录即可恢复。</p>
+          </div>
+          <div id="signedInSync" hidden>
+            <div class="account-row"><span><strong id="syncAccountEmail"></strong><small id="syncRoleLabel">尚未加入伴侣空间</small></span><button class="text-button" id="signOutButton" type="button">退出</button></div>
+            <div id="noCoupleActions">
+              <button class="primary-button sync-action" id="createCoupleButton" type="button"><i data-lucide="heart-handshake"></i>我是记录者，创建空间</button>
+              <div class="join-row"><input id="inviteCodeInput" maxlength="8" autocomplete="one-time-code" placeholder="输入邀请码"><button class="secondary-button" id="joinCoupleButton" type="button">加入</button></div>
+            </div>
+            <div id="coupleDetails" hidden>
+              <div class="invite-card" id="inviteCard" hidden><span>伴侣邀请码<strong id="inviteCodeValue"></strong><small id="inviteExpiry"></small></span><button class="icon-button" id="copyInviteButton" type="button" aria-label="复制邀请码" title="复制邀请码"><i data-lucide="copy"></i></button></div>
+              <p class="sync-note" id="coupleSyncCopy"></p>
+              <button class="secondary-button sync-action" id="syncNowButton" type="button"><i data-lucide="refresh-cw"></i>立即同步</button>
+            </div>
+          </div>
+          <p class="field-error" id="syncError" role="alert"></p>
+        </div>
         <div class="partner-panel">
           <div class="partner-heading"><span class="partner-icon"><i data-lucide="heart-handshake"></i></span><div><strong>伴侣摘要</strong><small>生成图片后由你亲自发送</small></div></div>
           <label class="partner-name-field">伴侣昵称<input id="partnerNameInput" maxlength="20" placeholder="例如：小明"></label>
@@ -164,7 +189,7 @@
             <label><span>疼痛和身体感受</span><input id="shareBodyInput" type="checkbox" role="switch" checked></label>
             <label><span>情绪状态</span><input id="shareMoodInput" type="checkbox" role="switch" checked></label>
           </div>
-          <p class="partner-privacy"><i data-lucide="shield-check"></i>同房记录、备注和自定义标签始终不会进入摘要。</p>
+          <p class="partner-privacy"><i data-lucide="shield-check"></i>实时伴侣空间会共享全部记录，包括同房、备注和自定义标签。</p>
           <button class="primary-button partner-preview-button" id="previewPartnerSummaryButton" type="button"><i data-lucide="image"></i>预览伴侣摘要</button>
         </div>
         <div class="settings-list">
@@ -184,7 +209,7 @@
         </div>
         <div class="privacy-note">
           <strong>隐私</strong>
-          <p>应用不上传记录，也不包含广告或统计代码。</p>
+          <p>未登录时记录只保存在当前设备；登录并加入伴侣空间后，记录会加密传输并同步到云端。应用不包含广告或统计代码。</p>
         </div>
       </section>
     </main>
@@ -372,7 +397,10 @@
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="vendor/lucide.min.js?v=6"></script>
-  <script src="app.js?v=6"></script>
+  <script src="vendor/lucide.min.js?v=7"></script>
+  <script src="vendor/supabase.min.js?v=7"></script>
+  <script src="config.js?v=7"></script>
+  <script src="cloud.js?v=7"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>
