@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=8">
+  <link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
   <div class="app-shell">
@@ -97,9 +97,18 @@
           <button class="filter-button" data-filter="sex" type="button">同房</button>
         </div>
         <div class="month-intimacy-summary" id="monthIntimacySummary">
-          <div class="section-row"><h3>本月亲密记录</h3><span id="intimacyMonthLabel"></span></div>
+          <div class="section-row intimacy-summary-heading">
+            <h3>亲密记录</h3>
+            <div class="summary-month-controls">
+              <button class="icon-button compact" id="previousIntimacyMonth" type="button" aria-label="上个月" title="上个月"><i data-lucide="chevron-left"></i></button>
+              <button class="month-picker-button" id="intimacyMonthLabel" type="button"></button>
+              <button class="icon-button compact" id="nextIntimacyMonth" type="button" aria-label="下个月" title="下个月"><i data-lucide="chevron-right"></i></button>
+              <button class="month-today-button" id="currentIntimacyMonth" type="button">本月</button>
+            </div>
+          </div>
           <div class="intimacy-metrics">
             <div><strong id="monthlySexTotal">0</strong><span>总次数</span></div>
+            <div><strong id="monthlySexMinutes">0</strong><span>总分钟</span></div>
             <div><strong id="monthlySexDays">0</strong><span>记录天数</span></div>
             <div><strong id="monthlyUnprotectedDays">0</strong><span>含未保护天数</span></div>
           </div>
@@ -295,12 +304,16 @@
 
       <fieldset>
         <legend>同房</legend>
+        <div class="segmented two intimacy-mode-options">
+          <label><input type="radio" name="intimacyMode" value="count" checked><span>按次数</span></label>
+          <label><input type="radio" name="intimacyMode" value="duration"><span>按总时长</span></label>
+        </div>
         <div class="sex-counter-row">
-          <span><strong>当天次数</strong><small>最多记录 9 次</small></span>
-          <div class="number-stepper" aria-label="当天同房次数">
-            <button id="decreaseSexCount" type="button" aria-label="减少次数" title="减少次数"><i data-lucide="minus"></i></button>
-            <output id="sexCountValue" aria-live="polite">0</output>
-            <button id="increaseSexCount" type="button" aria-label="增加次数" title="增加次数"><i data-lucide="plus"></i></button>
+          <span><strong id="intimacyAmountLabel">当天次数</strong><small id="intimacyAmountHint">最多记录 9 次</small></span>
+          <div class="number-stepper" id="intimacyAmountStepper" aria-label="当天同房次数">
+            <button id="decreaseSexCount" type="button" aria-label="减少" title="减少"><i data-lucide="minus"></i></button>
+            <input id="sexAmountInput" type="number" min="0" max="9" step="1" value="0" inputmode="numeric" aria-label="当天同房次数">
+            <button id="increaseSexCount" type="button" aria-label="增加" title="增加"><i data-lucide="plus"></i></button>
           </div>
         </div>
         <div class="protection-row" id="protectionRow">
@@ -327,6 +340,30 @@
         <button class="text-button" id="editPeriodRange" type="button">编辑整段</button>
         <button class="primary-button" id="saveRecord" type="button">保存</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog class="record-detail-dialog" id="recordDetailDialog">
+    <div class="record-detail-content">
+      <div class="dialog-header">
+        <div><p class="eyebrow">每日记录</p><h2 id="recordDetailTitle"></h2></div>
+        <button class="icon-button" id="closeRecordDetail" aria-label="关闭" title="关闭" type="button"><i data-lucide="x"></i></button>
+      </div>
+      <div class="record-detail-body" id="recordDetailBody"></div>
+    </div>
+  </dialog>
+
+  <dialog class="confirm-dialog" id="monthPickerDialog">
+    <form method="dialog" id="monthPickerForm">
+      <div class="dialog-header">
+        <div><p class="eyebrow">亲密记录</p><h2>选择月份</h2></div>
+        <button class="icon-button" value="cancel" aria-label="关闭" title="关闭" type="submit"><i data-lucide="x"></i></button>
+      </div>
+      <div class="month-picker-fields">
+        <label>年份<select id="intimacyYearSelect"></select></label>
+        <label>月份<select id="intimacyMonthSelect"></select></label>
+      </div>
+      <div class="dialog-actions"><button class="primary-button" id="applyIntimacyMonth" type="button">查看</button></div>
     </form>
   </dialog>
 
@@ -398,10 +435,10 @@
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="vendor/lucide.min.js?v=8"></script>
-  <script src="vendor/supabase.min.js?v=8"></script>
-  <script src="config.js?v=8"></script>
-  <script src="cloud.js?v=8"></script>
-  <script src="app.js?v=8"></script>
+  <script src="vendor/lucide.min.js?v=9"></script>
+  <script src="vendor/supabase.min.js?v=9"></script>
+  <script src="config.js?v=9"></script>
+  <script src="cloud.js?v=9"></script>
+  <script src="app.js?v=9"></script>
 </body>
 </html>

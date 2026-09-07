@@ -1,6 +1,8 @@
 const STORAGE_KEY = "cycle-journal-v1";
 const DRAFT_KEY = "cycle-journal-drafts-v1";
+const PRE_V9_BACKUP_KEY = "cycle-journal-pre-v9-backup";
 const SNAPSHOT_DB = "cycle-journal-storage";
+const STORAGE_VERSION = 4;
 const BACKUP_ITERATIONS = 250000;
 const SYMPTOMS = [
   { id: "bloating", label: "腹胀" }, { id: "acne", label: "痘痘" },
@@ -23,13 +25,16 @@ const stored = loadStore();
 const state = {
   month: startOfMonth(new Date()), selectedDate: null, records: stored.records,
   settings: stored.settings, calendarFilter: "all", periodRangeOriginal: null,
-  pendingImport: null, backupMode: "export", sexCount: 0, partnerSummaryBlob: null, cloudRole: "local"
+  pendingImport: null, backupMode: "export", intimacyMode: "count", sexCount: 0, sexMinutes: 0,
+  partnerSummaryBlob: null, cloudRole: "local"
 };
 
 const elements = {
   monthTitle: document.querySelector("#monthTitle"), cycleSummary: document.querySelector("#cycleSummary"),
   calendarGrid: document.querySelector("#calendarGrid"), recordDialog: document.querySelector("#recordDialog"),
-  recordDateTitle: document.querySelector("#recordDateTitle"), sexCountValue: document.querySelector("#sexCountValue"),
+  recordDateTitle: document.querySelector("#recordDateTitle"), sexAmountInput: document.querySelector("#sexAmountInput"),
+  intimacyAmountLabel: document.querySelector("#intimacyAmountLabel"), intimacyAmountHint: document.querySelector("#intimacyAmountHint"),
+  intimacyAmountStepper: document.querySelector("#intimacyAmountStepper"),
   spotting: document.querySelector("#spottingInput"), protectionRow: document.querySelector("#protectionRow"),
   flowFieldset: document.querySelector("#flowFieldset"), note: document.querySelector("#noteInput"),
   customTags: document.querySelector("#customTagsInput"), deleteRecord: document.querySelector("#deleteRecord"),
@@ -51,7 +56,8 @@ const elements = {
   guidanceCopy: document.querySelector("#guidanceCopy"), reminderEnabled: document.querySelector("#reminderEnabled"),
   reminderControls: document.querySelector("#reminderControls"), reminderDays: document.querySelector("#reminderDays"),
   reminderTime: document.querySelector("#reminderTime"), reminderStatus: document.querySelector("#reminderStatus"),
-  monthlySexTotal: document.querySelector("#monthlySexTotal"), monthlySexDays: document.querySelector("#monthlySexDays"),
+  monthlySexTotal: document.querySelector("#monthlySexTotal"), monthlySexMinutes: document.querySelector("#monthlySexMinutes"),
+  monthlySexDays: document.querySelector("#monthlySexDays"),
   monthlyUnprotectedDays: document.querySelector("#monthlyUnprotectedDays"), monthlyProtectionCopy: document.querySelector("#monthlyProtectionCopy"),
   intimacyMonthLabel: document.querySelector("#intimacyMonthLabel"), partnerName: document.querySelector("#partnerNameInput"),
   partnerMessage: document.querySelector("#partnerMessageInput"), shareCycle: document.querySelector("#shareCycleInput"),
@@ -60,6 +66,9 @@ const elements = {
   regularityArc: document.querySelector("#regularityArc"), regularityValue: document.querySelector("#regularityValue"),
   analysisVerdict: document.querySelector("#analysisVerdict"), analysisCopy: document.querySelector("#analysisCopy"),
   changeSummary: document.querySelector("#changeSummary"), flowHistory: document.querySelector("#flowHistory"),
+  recordDetailDialog: document.querySelector("#recordDetailDialog"), recordDetailTitle: document.querySelector("#recordDetailTitle"),
+  recordDetailBody: document.querySelector("#recordDetailBody"), monthPickerDialog: document.querySelector("#monthPickerDialog"),
+  intimacyYearSelect: document.querySelector("#intimacyYearSelect"), intimacyMonthSelect: document.querySelector("#intimacyMonthSelect"),
   toast: document.querySelector("#toast")
 };
 
@@ -104,16 +113,18 @@ function bindEvents() {
   }));
   document.querySelectorAll('input[name="period"]').forEach(input => input.addEventListener("change", updateFormVisibility));
   document.querySelectorAll('input[name="pain"]').forEach(input => input.addEventListener("change", syncPainSelection));
+  document.querySelectorAll('input[name="intimacyMode"]').forEach(input => input.addEventListener("change", changeIntimacyMode));
   document.querySelector("#recordForm").addEventListener("input", saveRecordDraft);
   document.querySelector("#recordForm").addEventListener("change", saveRecordDraft);
   document.querySelector("#decreaseSexCount").addEventListener("click", () => changeSexCount(-1));
   document.querySelector("#increaseSexCount").addEventListener("click", () => changeSexCount(1));
+  elements.sexAmountInput.addEventListener("input", updateIntimacyAmountFromInput);
   document.querySelector("#saveRecord").addEventListener("click", saveCurrentRecord);
   elements.deleteRecord.addEventListener("click", deleteCurrentRecord);
   elements.editPeriodRange.addEventListener("click", editSelectedPeriodRange);
   document.querySelector("#logTodayButton").addEventListener("click", () => openRecordDialog(new Date()));
   document.querySelector("#recordFab").addEventListener("click", () => openRecordDialog(new Date()));
-  document.querySelector("#editTodayButton").addEventListener("click", () => openRecordDialog(new Date()));
+  document.querySelector("#editTodayButton").addEventListener("click", () => openRecordForRole(new Date()));
   document.querySelector("#logPeriodRangeButton").addEventListener("click", () => openPeriodRangeDialog(new Date()));
   document.querySelector("#savePeriodRange").addEventListener("click", savePeriodRange);
   elements.deletePeriodRange.addEventListener("click", deleteCurrentPeriodRange);
@@ -134,13 +145,24 @@ function bindEvents() {
   document.querySelector("#sharePartnerSummary").addEventListener("click", sharePartnerSummary);
   document.querySelector("#clearButton").addEventListener("click", () => document.querySelector("#confirmDialog").showModal());
   document.querySelector("#confirmClear").addEventListener("click", clearAllData);
+  document.querySelector("#previousIntimacyMonth").addEventListener("click", () => changeMonth(-1));
+  document.querySelector("#nextIntimacyMonth").addEventListener("click", () => changeMonth(1));
+  document.querySelector("#currentIntimacyMonth").addEventListener("click", () => { state.month = startOfMonth(new Date()); renderCalendar(); });
+  elements.intimacyMonthLabel.addEventListener("click", openMonthPicker);
+  document.querySelector("#applyIntimacyMonth").addEventListener("click", applyIntimacyMonth);
+  document.querySelector("#closeRecordDetail").addEventListener("click", () => elements.recordDetailDialog.close());
 }
 
 function loadStore() {
   const defaults = { records: {}, settings: { ...DEFAULT_SETTINGS } };
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    const raw = localStorage.getItem(STORAGE_KEY);
+    const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || typeof parsed.records !== "object") return defaults;
+    if (raw && !localStorage.getItem(PRE_V9_BACKUP_KEY)) {
+      try { localStorage.setItem(PRE_V9_BACKUP_KEY, raw); }
+      catch (error) { console.warn("Pre-v9 backup could not be stored", error); }
+    }
     const records = Object.fromEntries(Object.entries(parsed.records).map(([key, record]) => [key, normalizeRecord(record)]));
     return { records, settings: { ...defaults.settings, ...(parsed.settings || {}) } };
   } catch { return defaults; }
@@ -150,14 +172,18 @@ function normalizeRecord(record = {}) {
   const allowed = (value, values) => values.includes(value) ? value : null;
   const legacyPainTypes = Array.isArray(record.symptoms) ? record.symptoms.filter(id => LEGACY_PAIN_IDS.has(id)) : [];
   const sexCount = clamp(Number.isFinite(Number(record.sexCount)) ? Math.round(Number(record.sexCount)) : record.hadSex ? 1 : 0, 0, 9);
+  const sexMinutes = clamp(Number.isFinite(Number(record.sexMinutes)) ? Math.round(Number(record.sexMinutes)) : 0, 0, 600);
+  const intimacyMode = record.intimacyMode === "duration" ? "duration" : "count";
+  const hasIntimacy = intimacyMode === "duration" ? sexMinutes > 0 : sexCount > 0;
   const legacyProtection = { yes: "all", no: "none" }[record.protection] || record.protection;
   return {
+    ...record,
     period: record.period || "none", flow: allowed(record.flow, ["light", "medium", "heavy", "veryHeavy"]), spotting: Boolean(record.spotting),
     energy: allowed(record.energy, ["exhausted", "low", "normal", "high"]),
     pain: allowed(record.pain, ["none", "mild", "moderate", "severe"]),
     mood: allowed(record.mood, ["low", "calm", "sensitive", "irritable"]),
-    sexCount, hadSex: sexCount > 0,
-    protection: sexCount ? allowed(legacyProtection, ["all", "partial", "none", "unknown"]) || "unknown" : null,
+    intimacyMode, sexCount, sexMinutes, hadSex: hasIntimacy,
+    protection: hasIntimacy ? allowed(legacyProtection, ["all", "partial", "none", "unknown"]) || "unknown" : null,
     painTypes: [...new Set([...(Array.isArray(record.painTypes) ? record.painTypes : []), ...legacyPainTypes])].filter(id => PAIN_TYPES.some(item => item.id === id)),
     symptoms: Array.isArray(record.symptoms) ? record.symptoms.filter(id => SYMPTOMS.some(item => item.id === id)) : [],
     customTags: Array.isArray(record.customTags) ? record.customTags.filter(Boolean) : [],
@@ -166,7 +192,7 @@ function normalizeRecord(record = {}) {
 }
 
 function persist(options = {}) {
-  const snapshot = { version: 3, records: state.records, settings: state.settings };
+  const snapshot = { version: STORAGE_VERSION, records: state.records, settings: state.settings };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
   saveIndexedSnapshot(snapshot);
   if (options.cloud !== false) window.CloudSync?.schedulePush();
@@ -203,7 +229,7 @@ async function recoverIndexedSnapshot() {
       state.records = normalizeRecords(snapshot.records);
       state.settings = { ...DEFAULT_SETTINGS, ...(snapshot.settings || {}) };
       persist({ cloud: false }); render(); showToast("已从设备快照恢复记录");
-    } else if (!snapshot) saveIndexedSnapshot({ version: 3, records: state.records, settings: state.settings });
+    } else if (!snapshot) saveIndexedSnapshot({ version: STORAGE_VERSION, records: state.records, settings: state.settings });
   } catch (error) { console.warn("IndexedDB recovery failed", error); }
 }
 
@@ -220,9 +246,11 @@ function applyCloudRole(role) {
   state.cloudRole = role;
   const readOnly = role === "partner";
   document.body.classList.toggle("partner-readonly", readOnly);
-  ["#logTodayButton", "#logPeriodRangeButton", "#recordFab", "#editTodayButton", "#clearButton"].forEach(selector => {
+  ["#logTodayButton", "#logPeriodRangeButton", "#recordFab", "#clearButton"].forEach(selector => {
     const button = document.querySelector(selector); if (button) button.disabled = readOnly;
   });
+  const todayButton = document.querySelector("#editTodayButton");
+  todayButton.disabled = false; todayButton.textContent = readOnly ? "查看" : "编辑";
   if (readOnly && elements.recordDialog.open) elements.recordDialog.close();
 }
 function dateKey(date) {
@@ -348,7 +376,8 @@ function recordLabels(record) {
   const flow = { light: "经量少", medium: "经量中", heavy: "经量多", veryHeavy: "经量超多" }[record.flow];
   if (flow) labels.push(flow);
   if (record.spotting) labels.push("点滴出血");
-  if (record.sexCount) labels.push(`同房 ${record.sexCount} 次`);
+  if (record.intimacyMode === "duration" && record.sexMinutes) labels.push(`同房 ${record.sexMinutes} 分钟`);
+  else if (record.sexCount) labels.push(`同房 ${record.sexCount} 次`);
   const energy = { exhausted: "精力耗尽", low: "有些疲倦", normal: "精力正常", high: "精力充沛" }[record.energy];
   const pain = { none: "无痛", mild: "轻微疼痛", moderate: "明显疼痛", severe: "严重疼痛" }[record.pain];
   const mood = { low: "情绪低落", calm: "情绪平静", sensitive: "较为敏感", irritable: "烦躁" }[record.mood];
@@ -382,9 +411,9 @@ function renderCalendar() {
     button.innerHTML = `<span class="day-number">${date.getDate()}</span><span class="day-markers"></span>`;
     const markers = button.querySelector(".day-markers");
     if (record?.period && record.period !== "none") markers.append(makeMarker("period-marker"));
-    if (record?.sexCount) markers.append(makeSexMarker(record.sexCount));
+    if (hasIntimacyRecord(record)) markers.append(makeSexMarker(record));
     if (record?.spotting || record?.painTypes?.length || record?.symptoms?.length || record?.customTags?.length) markers.append(makeMarker("symptom-marker"));
-    button.addEventListener("click", () => openRecordDialog(date)); elements.calendarGrid.append(button);
+    button.addEventListener("click", () => openRecordForRole(date)); elements.calendarGrid.append(button);
   }
   renderMonthlyIntimacySummary();
 }
@@ -392,32 +421,124 @@ function renderCalendar() {
 function matchesCalendarFilter(record) {
   if (state.calendarFilter === "all") return true;
   if (state.calendarFilter === "period") return Boolean(record?.period && record.period !== "none");
-  if (state.calendarFilter === "sex") return Boolean(record?.sexCount);
+  if (state.calendarFilter === "sex") return hasIntimacyRecord(record);
   return Boolean(record?.spotting || record?.painTypes?.length || record?.symptoms?.length || record?.customTags?.length);
 }
 function makeMarker(className) { const marker = document.createElement("i"); marker.className = `marker ${className}`; return marker; }
-function makeSexMarker(count) {
+function hasIntimacyRecord(record) {
+  return Boolean(record && (record.intimacyMode === "duration" ? record.sexMinutes > 0 : record.sexCount > 0));
+}
+function makeSexMarker(record) {
   const marker = document.createElement("span"); marker.className = "sex-count-marker";
-  marker.textContent = count > 1 ? String(count) : ""; marker.title = `同房 ${count} 次`; return marker;
+  if (record.intimacyMode === "duration") {
+    marker.classList.add("duration"); marker.textContent = record.sexMinutes >= 100 ? "时" : `${record.sexMinutes}m`;
+    marker.title = `同房 ${record.sexMinutes} 分钟`;
+  } else {
+    marker.textContent = record.sexCount > 1 ? String(record.sexCount) : ""; marker.title = `同房 ${record.sexCount} 次`;
+  }
+  return marker;
 }
 
 function renderMonthlyIntimacySummary() {
   const year = state.month.getFullYear(), month = state.month.getMonth();
   const records = Object.entries(state.records).filter(([key, record]) => {
-    const date = parseDate(key); return date.getFullYear() === year && date.getMonth() === month && record.sexCount > 0;
+    const date = parseDate(key); return date.getFullYear() === year && date.getMonth() === month && hasIntimacyRecord(record);
   }).map(([, record]) => record);
-  const total = records.reduce((sum, record) => sum + record.sexCount, 0);
-  const protectedCount = records.filter(record => record.protection === "all").reduce((sum, record) => sum + record.sexCount, 0);
+  const total = records.filter(record => record.intimacyMode !== "duration").reduce((sum, record) => sum + record.sexCount, 0);
+  const totalMinutes = records.filter(record => record.intimacyMode === "duration").reduce((sum, record) => sum + record.sexMinutes, 0);
+  const protectedDays = records.filter(record => record.protection === "all").length;
   const unprotectedDays = records.filter(record => ["partial", "none"].includes(record.protection)).length;
-  const unknownCount = records.filter(record => record.protection === "unknown").reduce((sum, record) => sum + record.sexCount, 0);
-  elements.intimacyMonthLabel.textContent = `${month + 1} 月`;
-  elements.monthlySexTotal.textContent = String(total); elements.monthlySexDays.textContent = String(records.length);
+  const unknownDays = records.filter(record => record.protection === "unknown").length;
+  elements.intimacyMonthLabel.textContent = `${year}年${month + 1}月`;
+  elements.monthlySexTotal.textContent = String(total); elements.monthlySexMinutes.textContent = String(totalMinutes);
+  elements.monthlySexDays.textContent = String(records.length);
   elements.monthlyUnprotectedDays.textContent = String(unprotectedDays);
-  if (!total) elements.monthlyProtectionCopy.textContent = "本月还没有亲密记录。";
-  else elements.monthlyProtectionCopy.textContent = `全部有保护 ${protectedCount} 次${unknownCount ? ` · 未记录保护措施 ${unknownCount} 次` : ""}`;
+  if (!records.length) elements.monthlyProtectionCopy.textContent = "这个月还没有亲密记录。";
+  else elements.monthlyProtectionCopy.textContent = `全部有保护 ${protectedDays} 天${unknownDays ? ` · 未记录保护措施 ${unknownDays} 天` : ""}`;
 }
 function dayAriaLabel(date, record) {
   return [new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(date), ...recordLabels(record)].join("，");
+}
+
+function openMonthPicker() {
+  const currentYear = new Date().getFullYear();
+  const recordYears = Object.keys(state.records).map(key => parseDate(key).getFullYear());
+  const minimumYear = Math.min(currentYear - 10, ...recordYears);
+  const maximumYear = Math.max(currentYear + 2, ...recordYears);
+  elements.intimacyYearSelect.replaceChildren(); elements.intimacyMonthSelect.replaceChildren();
+  for (let year = maximumYear; year >= minimumYear; year -= 1) {
+    const option = document.createElement("option"); option.value = String(year); option.textContent = `${year} 年`;
+    elements.intimacyYearSelect.append(option);
+  }
+  for (let month = 1; month <= 12; month += 1) {
+    const option = document.createElement("option"); option.value = String(month); option.textContent = `${month} 月`;
+    elements.intimacyMonthSelect.append(option);
+  }
+  elements.intimacyYearSelect.value = String(state.month.getFullYear());
+  elements.intimacyMonthSelect.value = String(state.month.getMonth() + 1);
+  elements.monthPickerDialog.showModal();
+}
+
+function applyIntimacyMonth() {
+  const year = Number(elements.intimacyYearSelect.value); const month = Number(elements.intimacyMonthSelect.value);
+  if (!Number.isInteger(year) || month < 1 || month > 12) return;
+  state.month = new Date(year, month - 1, 1, 12); elements.monthPickerDialog.close(); renderCalendar();
+}
+
+function openRecordForRole(date) {
+  if (state.cloudRole === "partner") openRecordDetail(date);
+  else openRecordDialog(date);
+}
+
+function openRecordDetail(date) {
+  const record = state.records[dateKey(date)];
+  elements.recordDetailTitle.textContent = new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric", month: "long", day: "numeric", weekday: "short"
+  }).format(date);
+  elements.recordDetailBody.replaceChildren();
+  if (!record || !recordHasData(record)) {
+    const empty = document.createElement("p"); empty.className = "record-detail-empty"; empty.textContent = "这一天没有记录";
+    elements.recordDetailBody.append(empty);
+  } else {
+    const groups = recordDetailGroups(record);
+    groups.filter(group => group.values.length).forEach(group => {
+      const section = document.createElement("section"); section.className = "record-detail-section";
+      const heading = document.createElement("h3"); heading.textContent = group.title;
+      const values = document.createElement("div"); values.className = "record-detail-values";
+      group.values.forEach(value => values.append(createTag(value))); section.append(heading, values);
+      elements.recordDetailBody.append(section);
+    });
+    if (record.note) {
+      const section = document.createElement("section"); section.className = "record-detail-section note";
+      const heading = document.createElement("h3"); heading.textContent = "备注";
+      const note = document.createElement("p"); note.textContent = record.note; section.append(heading, note);
+      elements.recordDetailBody.append(section);
+    }
+  }
+  elements.recordDetailDialog.showModal(); queueMicrotask(refreshIcons);
+}
+
+function recordDetailGroups(record) {
+  const cycle = [];
+  const period = { start: "经期开始", ongoing: "经期进行中", end: "经期结束" }[record.period];
+  const flow = { light: "经量少", medium: "经量中", heavy: "经量多", veryHeavy: "经量超多" }[record.flow];
+  if (period) cycle.push(period); if (flow) cycle.push(flow); if (record.spotting) cycle.push("点滴出血");
+  const body = [];
+  const energy = { exhausted: "精力耗尽", low: "有些疲倦", normal: "精力正常", high: "精力充沛" }[record.energy];
+  const pain = { none: "无痛", mild: "轻微疼痛", moderate: "明显疼痛", severe: "严重疼痛" }[record.pain];
+  const mood = { low: "情绪低落", calm: "情绪平静", sensitive: "较为敏感", irritable: "烦躁" }[record.mood];
+  if (energy) body.push(energy); if (pain) body.push(pain); if (mood) body.push(mood);
+  record.painTypes?.forEach(id => { const item = PAIN_TYPES.find(type => type.id === id); if (item) body.push(item.label); });
+  record.symptoms?.forEach(id => { const item = SYMPTOMS.find(symptom => symptom.id === id); if (item) body.push(item.label); });
+  const intimacy = [];
+  if (hasIntimacyRecord(record)) {
+    intimacy.push(record.intimacyMode === "duration" ? `总时长 ${record.sexMinutes} 分钟` : `${record.sexCount} 次`);
+    intimacy.push(`保护措施：${{ all: "全部有", partial: "部分有", none: "均无", unknown: "未记录" }[record.protection] || "未记录"}`);
+  }
+  return [
+    { title: "经期", values: cycle }, { title: "身体与情绪", values: body },
+    { title: "亲密记录", values: intimacy }, { title: "自定义标签", values: record.customTags || [] }
+  ];
 }
 
 function renderSymptomOptions() {
@@ -442,7 +563,7 @@ function renderPainTypeOptions() {
 }
 
 function openRecordDialog(date) {
-  if (state.cloudRole === "partner") { showToast("伴侣账号只能查看记录"); return; }
+  if (state.cloudRole === "partner") { openRecordDetail(date); return; }
   populateRecordForm(date);
   if (!elements.recordDialog.open) elements.recordDialog.showModal();
   queueMicrotask(refreshIcons);
@@ -459,7 +580,9 @@ function populateRecordForm(date) {
   setRadio("period", record.period || "none"); setRadio("flow", record.flow || "medium");
   setOptionalRadio("energy", record.energy); setOptionalRadio("pain", record.pain); setOptionalRadio("mood", record.mood);
   document.querySelectorAll('input[name="painTypes"]').forEach(input => { input.checked = record.painTypes.includes(input.value); });
-  elements.spotting.checked = Boolean(record.spotting); state.sexCount = record.sexCount || 0; renderSexCount();
+  elements.spotting.checked = Boolean(record.spotting);
+  state.intimacyMode = record.intimacyMode || "count"; state.sexCount = record.sexCount || 0; state.sexMinutes = record.sexMinutes || 0;
+  setRadio("intimacyMode", state.intimacyMode); renderIntimacyAmount();
   setRadio("protection", record.protection || "unknown");
   document.querySelectorAll('input[name="symptoms"]').forEach(input => { input.checked = record.symptoms.includes(input.value); });
   elements.customTags.value = record.customTags.join("、"); elements.note.value = record.note || "";
@@ -474,11 +597,33 @@ function setOptionalRadio(name, value) {
   document.querySelectorAll(`input[name="${name}"]`).forEach(input => { input.checked = input.value === value; });
 }
 function selectedRadio(name) { return document.querySelector(`input[name="${name}"]:checked`)?.value; }
-function changeSexCount(offset) { state.sexCount = clamp(state.sexCount + offset, 0, 9); renderSexCount(); updateFormVisibility(); saveRecordDraft(); }
-function renderSexCount() {
-  elements.sexCountValue.textContent = String(state.sexCount);
-  document.querySelector("#decreaseSexCount").disabled = state.sexCount === 0;
-  document.querySelector("#increaseSexCount").disabled = state.sexCount === 9;
+function changeIntimacyMode() {
+  state.intimacyMode = selectedRadio("intimacyMode") === "duration" ? "duration" : "count";
+  renderIntimacyAmount(); updateFormVisibility(); saveRecordDraft();
+}
+function changeSexCount(direction) {
+  const step = state.intimacyMode === "duration" ? 5 : 1;
+  if (state.intimacyMode === "duration") state.sexMinutes = clamp(state.sexMinutes + direction * step, 0, 600);
+  else state.sexCount = clamp(state.sexCount + direction * step, 0, 9);
+  renderIntimacyAmount(); updateFormVisibility(); saveRecordDraft();
+}
+function updateIntimacyAmountFromInput() {
+  const value = Number(elements.sexAmountInput.value);
+  if (state.intimacyMode === "duration") state.sexMinutes = clamp(Number.isFinite(value) ? Math.round(value) : 0, 0, 600);
+  else state.sexCount = clamp(Number.isFinite(value) ? Math.round(value) : 0, 0, 9);
+  renderIntimacyAmount(); updateFormVisibility(); saveRecordDraft();
+}
+function renderIntimacyAmount() {
+  const duration = state.intimacyMode === "duration"; const value = duration ? state.sexMinutes : state.sexCount;
+  const maximum = duration ? 600 : 9;
+  elements.intimacyAmountLabel.textContent = duration ? "当天总时长" : "当天次数";
+  elements.intimacyAmountHint.textContent = duration ? "单位：分钟，最多 600 分钟" : "最多记录 9 次";
+  elements.intimacyAmountStepper.setAttribute("aria-label", duration ? "当天同房总时长" : "当天同房次数");
+  elements.sexAmountInput.min = "0"; elements.sexAmountInput.max = String(maximum); elements.sexAmountInput.step = duration ? "5" : "1";
+  elements.sexAmountInput.setAttribute("aria-label", duration ? "当天同房总分钟" : "当天同房次数");
+  elements.sexAmountInput.value = String(value);
+  document.querySelector("#decreaseSexCount").disabled = value === 0;
+  document.querySelector("#increaseSexCount").disabled = value === maximum;
 }
 function syncPainSelection() {
   if (selectedRadio("pain") === "none") document.querySelectorAll('input[name="painTypes"]').forEach(input => { input.checked = false; });
@@ -496,7 +641,7 @@ function renderRecordWeekStrip() {
 }
 function updateFormVisibility() {
   elements.flowFieldset.hidden = selectedRadio("period") === "none";
-  elements.protectionRow.hidden = state.sexCount === 0;
+  elements.protectionRow.hidden = state.intimacyMode === "duration" ? state.sexMinutes === 0 : state.sexCount === 0;
 }
 
 function collectRecordForm() {
@@ -505,7 +650,9 @@ function collectRecordForm() {
     period, flow: period === "none" ? null : selectedRadio("flow"), spotting: elements.spotting.checked,
     energy: selectedRadio("energy"), pain: selectedRadio("pain"), mood: selectedRadio("mood"),
     painTypes: selectedRadio("pain") === "none" ? [] : [...document.querySelectorAll('input[name="painTypes"]:checked')].map(input => input.value),
-    sexCount: state.sexCount, hadSex: state.sexCount > 0, protection: state.sexCount ? selectedRadio("protection") : null,
+    intimacyMode: state.intimacyMode, sexCount: state.sexCount, sexMinutes: state.sexMinutes,
+    hadSex: state.intimacyMode === "duration" ? state.sexMinutes > 0 : state.sexCount > 0,
+    protection: (state.intimacyMode === "duration" ? state.sexMinutes : state.sexCount) ? selectedRadio("protection") : null,
     symptoms: [...document.querySelectorAll('input[name="symptoms"]:checked')].map(input => input.value),
     customTags: parseTags(elements.customTags.value), note: elements.note.value.trim()
   });
@@ -535,7 +682,7 @@ function saveCurrentRecord() {
 }
 function parseTags(value) { return [...new Set(value.split(/[，,、]/).map(item => item.trim()).filter(Boolean))].slice(0, 8); }
 function recordHasData(record) {
-  return Boolean((record.period && record.period !== "none") || record.spotting || record.energy || record.pain || record.mood || record.painTypes?.length || record.sexCount || record.symptoms?.length || record.customTags?.length || record.note);
+  return Boolean((record.period && record.period !== "none") || record.spotting || record.energy || record.pain || record.mood || record.painTypes?.length || hasIntimacyRecord(record) || record.symptoms?.length || record.customTags?.length || record.note);
 }
 function deleteCurrentRecord() {
   const key = dateKey(state.selectedDate); delete state.records[key]; clearRecordDraft(key); persist(); elements.recordDialog.close(); render(); showToast("记录已删除");
@@ -859,7 +1006,9 @@ function buildPartnerSummaryData() {
   record?.painTypes?.forEach(id => { const item = PAIN_TYPES.find(type => type.id === id); if (item) body.push(item.label); });
   record?.symptoms?.forEach(id => { const item = SYMPTOMS.find(symptom => symptom.id === id); if (item) body.push(item.label); });
   const mood = { low: "情绪有些低落", calm: "情绪比较平静", sensitive: "今天比较敏感", irritable: "今天有些烦躁" }[record?.mood];
-  const intimacy = record?.sexCount ? `同房 ${record.sexCount} 次，保护措施：${{ all: "全部有", partial: "部分有", none: "均无", unknown: "未记录" }[record.protection] || "未记录"}` : "今天没有同房记录";
+  const intimacy = hasIntimacyRecord(record)
+    ? `同房${record.intimacyMode === "duration" ? `总时长 ${record.sexMinutes} 分钟` : ` ${record.sexCount} 次`}，保护措施：${{ all: "全部有", partial: "部分有", none: "均无", unknown: "未记录" }[record.protection] || "未记录"}`
+    : "今天没有同房记录";
   const notes = [record?.customTags?.length ? `标签：${record.customTags.join("、")}` : "", record?.note ? `备注：${record.note}` : ""].filter(Boolean).join("；") || "今天没有标签或备注";
   return {
     partnerName: state.settings.partnerName || "亲爱的", message: state.settings.partnerMessage || "这是我今天的周期状态，希望我们都更了解身体的变化。",

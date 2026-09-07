@@ -144,6 +144,7 @@ dialog::backdrop { background: rgba(15, 23, 21, .52); }
 fieldset { min-width: 0; margin: 0 0 21px; padding: 0; border: 0; }
 legend, .note-field { display: block; width: 100%; margin-bottom: 9px; color: var(--muted); font-size: 13px; font-weight: 700; }
 .segmented { display: grid; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: #f2f4f2; }
+.segmented.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .segmented.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .segmented.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .segmented label { min-width: 0; }
@@ -304,7 +305,7 @@ textarea { resize: vertical; }
 .invite-card strong { margin-top: 3px; color: var(--ink); font-size: 22px; letter-spacing: 0; }
 .invite-card small { margin-top: 2px; }
 .sync-panel .field-error { min-height: 0; margin-top: 10px; }
-.partner-readonly .record-fab, .partner-readonly #logTodayButton, .partner-readonly #logPeriodRangeButton, .partner-readonly #editTodayButton { opacity: .38; cursor: not-allowed; }
+.partner-readonly .record-fab, .partner-readonly #logTodayButton, .partner-readonly #logPeriodRangeButton { opacity: .38; cursor: not-allowed; }
 @keyframes sync-pulse { 50% { opacity: .4; } }
 
 @media (max-width: 430px) {
@@ -443,10 +444,18 @@ dialog { border: 1px solid rgba(220,227,223,.8); }
 }
 
 /* Fifth edition: intimacy totals and private partner summaries. */
-.sex-count-marker { width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%; background: var(--sex); color: white; font-size: 9px; font-style: normal; font-weight: 800; }
+.sex-count-marker { min-width: 16px; height: 16px; display: grid; place-items: center; padding: 0 3px; border-radius: 8px; background: var(--sex); color: white; font-size: 9px; font-style: normal; font-weight: 800; }
+.sex-count-marker.duration { min-width: 24px; font-size: 8px; }
 .month-intimacy-summary { padding: 22px 20px 24px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface); }
 .month-intimacy-summary h3 { margin-bottom: 0; }
-.intimacy-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.intimacy-summary-heading { align-items: center; }
+.summary-month-controls { display: flex; align-items: center; gap: 4px; }
+.icon-button.compact { width: 30px; height: 30px; }
+.icon-button.compact svg { width: 16px; height: 16px; }
+.month-picker-button, .month-today-button { min-height: 30px; border: 1px solid var(--line); border-radius: 6px; background: #fbfcfb; color: var(--ink); font-size: 11px; font-weight: 700; cursor: pointer; }
+.month-picker-button { min-width: 84px; padding: 4px 8px; }
+.month-today-button { padding: 4px 7px; color: var(--sex); }
+.intimacy-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .intimacy-metrics > div { min-width: 0; padding: 15px 10px; border-right: 1px solid var(--line); text-align: center; }
 .intimacy-metrics > div:last-child { border-right: 0; }
 .intimacy-metrics strong, .intimacy-metrics span { display: block; }
@@ -454,6 +463,7 @@ dialog { border: 1px solid rgba(220,227,223,.8); }
 .intimacy-metrics span { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.3; }
 .month-intimacy-summary > p { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
 
+.intimacy-mode-options { margin-bottom: 8px; }
 .sex-counter-row { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 .sex-counter-row > span strong, .sex-counter-row > span small { display: block; }
 .sex-counter-row > span small { margin-top: 3px; color: var(--muted); font-size: 10px; }
@@ -461,7 +471,8 @@ dialog { border: 1px solid rgba(220,227,223,.8); }
 .number-stepper button { display: grid; place-items: center; border: 0; background: transparent; color: var(--sex); cursor: pointer; }
 .number-stepper button:disabled { color: #b8c1bd; cursor: default; }
 .number-stepper button svg { width: 18px; height: 18px; }
-.number-stepper output { display: grid; place-items: center; border-right: 1px solid var(--line); border-left: 1px solid var(--line); background: white; font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.number-stepper input { width: 46px; min-width: 0; padding: 0; border: 0; border-right: 1px solid var(--line); border-left: 1px solid var(--line); border-radius: 0; background: white; color: var(--ink); text-align: center; font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; appearance: textfield; }
+.number-stepper input::-webkit-inner-spin-button, .number-stepper input::-webkit-outer-spin-button { margin: 0; appearance: none; }
 .protection-options { width: min(100%, 300px); }
 .protection-options span { font-size: 11px; }
 
@@ -503,8 +514,27 @@ dialog { border: 1px solid rgba(220,227,223,.8); }
 .partner-summary-dialog-content .dialog-actions button { display: flex; align-items: center; justify-content: center; gap: 7px; }
 .partner-summary-dialog-content .dialog-actions svg { width: 17px; height: 17px; }
 
+.record-detail-dialog { width: min(calc(100% - 24px), 500px); }
+.record-detail-content { max-height: 92vh; padding: 20px; overflow-y: auto; }
+.record-detail-body { min-height: 130px; }
+.record-detail-empty { padding: 42px 10px; color: var(--muted); text-align: center; }
+.record-detail-section { padding: 15px 0; border-top: 1px solid var(--line); }
+.record-detail-section:first-child { border-top: 0; }
+.record-detail-section h3 { margin: 0 0 10px; font-size: 12px; }
+.record-detail-values { display: flex; flex-wrap: wrap; gap: 7px; }
+.record-detail-section.note p { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
+.month-picker-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.month-picker-fields label { color: var(--muted); font-size: 11px; font-weight: 700; }
+.month-picker-fields select { width: 100%; min-height: 44px; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: white; color: var(--ink); }
+
 @media (max-width: 430px) {
   .month-intimacy-summary, .partner-panel { padding-right: 16px; padding-left: 16px; }
+  .intimacy-summary-heading { align-items: flex-start; flex-direction: column; gap: 11px; }
+  .summary-month-controls { width: 100%; }
+  .month-picker-button { flex: 1; }
+  .intimacy-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .intimacy-metrics > div:nth-child(2) { border-right: 0; }
+  .intimacy-metrics > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .protection-row { align-items: stretch; }
   .protection-options { width: 100%; }
   .partner-summary-dialog-content .dialog-actions button { flex: 1 1 140px; }
