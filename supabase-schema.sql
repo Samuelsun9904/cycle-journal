@@ -27,11 +27,29 @@ create table if not exists public.partner_responses (
   couple_id uuid not null references public.couples(id) on delete cascade,
   response_date date not null,
   responder_id uuid not null references auth.users(id) on delete cascade,
-  response_type text not null check (response_type in ('seen', 'hug', 'care', 'prepare')),
+  response_type text not null,
+  response_text text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   primary key (couple_id, response_date)
 );
+
+alter table public.partner_responses
+  add column if not exists response_text text;
+
+alter table public.partner_responses
+  drop constraint if exists partner_responses_response_type_check;
+alter table public.partner_responses
+  add constraint partner_responses_response_type_check
+  check (response_type in ('seen', 'hug', 'care', 'prepare', 'custom'));
+
+alter table public.partner_responses
+  drop constraint if exists partner_responses_content_check;
+alter table public.partner_responses
+  add constraint partner_responses_content_check check (
+    (response_type = 'custom' and nullif(trim(response_text), '') is not null and char_length(response_text) <= 30)
+    or (response_type <> 'custom' and response_text is null)
+  );
 
 create or replace function public.touch_daily_record()
 returns trigger language plpgsql set search_path = public as $$

@@ -1,10 +1,10 @@
-const CACHE_NAME = "cycle-journal-v12";
+const CACHE_NAME = "cycle-journal-v13";
 const ASSETS = [
   "./",
   "index.html",
-  "styles.css?v=12",
-  "app.js?v=12",
-  "cloud.js?v=12",
+  "styles.css?v=13",
+  "app.js?v=13",
+  "cloud.js?v=13",
   "config.js?v=11",
   "vendor/lucide.min.js?v=11",
   "vendor/supabase.min.js?v=11",

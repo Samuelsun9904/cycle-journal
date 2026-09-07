@@ -323,6 +323,7 @@
     if (role === "owner" && dirtyVersions.size) pushRequested = true;
     pullRequested = true;
     const success = await drainSync();
+    await pullPartnerResponses();
     if (userInitiated && success) app.notify("同步完成");
     return success;
   }
@@ -334,6 +335,7 @@
     if (role === "owner" && dirtyVersions.size) pushRequested = true;
     pullRequested = true;
     drainSync();
+    pullPartnerResponses();
   }
 
   function scheduleRetry(failedOperation) {
@@ -496,7 +498,7 @@
     const rows = [];
     for (let from = 0; ; from += PAGE_SIZE) {
       const { data, error } = await client.from("partner_responses")
-        .select("response_date,response_type,updated_at")
+        .select("response_date,response_type,response_text,updated_at")
         .eq("couple_id", couple.id)
         .order("response_date", { ascending: true })
         .range(from, from + PAGE_SIZE - 1);
@@ -515,6 +517,7 @@
       responsesAvailable = true;
       partnerResponses = Object.fromEntries(rows.map(row => [row.response_date, {
         type: row.response_type,
+        text: row.response_text || "",
         updatedAt: row.updated_at
       }]));
       app.replacePartnerResponses?.(partnerResponses);
@@ -545,10 +548,12 @@
     return true;
   }
 
-  async function setPartnerResponse(recordDate, responseType) {
-    const allowed = new Set(["seen", "hug", "care", "prepare"]);
+  async function setPartnerResponse(recordDate, responseType, responseText = null) {
+    const allowed = new Set(["seen", "hug", "care", "prepare", "custom"]);
     if (role !== "partner" || !couple || !responsesAvailable || !couple.responses_enabled) return false;
+    const normalizedText = typeof responseText === "string" ? responseText.trim() : "";
     if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDate) || (responseType !== null && !allowed.has(responseType))) return false;
+    if (responseType === "custom" && (!normalizedText || [...normalizedText].length > 30)) return false;
     let result;
     if (responseType === null) {
       result = await client.from("partner_responses").delete()
@@ -558,8 +563,9 @@
         couple_id: couple.id,
         response_date: recordDate,
         responder_id: session.user.id,
-        response_type: responseType
-      }, { onConflict: "couple_id,response_date" }).select("response_date,response_type,updated_at").single();
+        response_type: responseType,
+        response_text: responseType === "custom" ? normalizedText : null
+      }, { onConflict: "couple_id,response_date" }).select("response_date,response_type,response_text,updated_at").single();
     }
     if (result.error) {
       if (isMissingResponseSchema(result.error)) responsesAvailable = false;
@@ -570,6 +576,7 @@
     if (responseType === null) delete partnerResponses[recordDate];
     else partnerResponses[recordDate] = {
       type: result.data?.response_type || responseType,
+      text: result.data?.response_text || (responseType === "custom" ? normalizedText : ""),
       updatedAt: result.data?.updated_at || new Date().toISOString()
     };
     app.replacePartnerResponses?.({ ...partnerResponses });
@@ -600,6 +607,7 @@
         if (status === "SUBSCRIBED") {
           pullRequested = true;
           drainSync();
+          pullPartnerResponses();
         }
         if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) {
           setStatus("实时连接中断，正在重连", "error");

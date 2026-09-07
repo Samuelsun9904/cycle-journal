@@ -90,6 +90,7 @@ h3 { font-size: 16px; letter-spacing: 0; }
 .legend-sex { background: var(--sex); }
 .legend-symptom { background: var(--symptom); }
 .legend-predicted { background: var(--predicted); }
+.legend-response { background: var(--mood); }
 .calendar-filters { display: flex; gap: 7px; padding: 4px 20px 20px; overflow-x: auto; }
 .filter-button { flex: 0 0 auto; min-height: 34px; padding: 6px 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); cursor: pointer; font-size: 12px; }
 .filter-button.active { border-color: var(--ink); background: var(--ink); color: white; }
@@ -652,4 +653,56 @@ input[role="switch"]:disabled { opacity: .5; cursor: not-allowed; }
   .response-settings { padding-right: 16px; padding-left: 16px; }
   .partner-response-options { grid-template-columns: 1fr; }
   .partner-response-option { min-height: 46px; }
+}
+
+/* Thirteenth edition: clearer hierarchy, response composer, and release notes. */
+.app-shell { border-right: 1px solid rgba(203,213,208,.7); border-left: 1px solid rgba(203,213,208,.7); }
+.topbar { min-height: 82px; padding-bottom: 16px; box-shadow: 0 6px 22px rgba(29,45,39,.05); }
+.topbar h1 { position: relative; padding-left: 13px; }
+.topbar h1::before { content: ""; position: absolute; top: 1px; bottom: 1px; left: 0; width: 4px; border-radius: 2px; background: var(--phase-accent); }
+.cycle-hero { min-height: 286px; }
+.cycle-ring-wrap { filter: drop-shadow(0 8px 16px rgba(35,62,53,.08)); }
+.cycle-hero-copy .status-line strong { line-height: 1.18; }
+.quick-primary { border-color: var(--phase-accent); background: var(--phase-accent); }
+.today-guidance, .today-details { background: var(--surface); }
+.today-guidance { margin: 0; padding: 22px 20px; border-bottom: 1px solid var(--line); }
+.today-details { padding-top: 26px; }
+.section-row h2::after { content: ""; display: block; width: 28px; height: 3px; margin-top: 7px; border-radius: 2px; background: var(--phase-accent); }
+.month-toolbar { border-bottom: 1px solid var(--line); box-shadow: 0 5px 18px rgba(29,45,39,.04); }
+.weekdays { padding-top: 7px; }
+.calendar-grid { gap: 3px; padding: 3px 12px 5px; border: 0; background: #e3e9e6; }
+.day { border: 0; border-radius: 5px; }
+.day.today { box-shadow: inset 0 0 0 2px var(--ink); }
+.marker.response-marker { width: 9px; height: 9px; background: var(--mood); box-shadow: 0 0 0 2px #fff; }
+.filter-button.active { border-color: var(--phase-accent); background: var(--phase-accent); }
+.partner-response-banner.clickable { grid-template-columns: 38px minmax(0, 1fr) 12px; cursor: pointer; }
+.partner-response-banner.clickable::after { content: ">"; align-self: center; color: #8c627b; font-size: 17px; }
+.custom-response-row { display: grid; grid-template-columns: minmax(0, 1fr) 44px; gap: 8px; margin-top: 10px; }
+.custom-response-row input { min-width: 0; height: 44px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfb; color: var(--ink); }
+.custom-response-row input:focus { border-color: var(--mood); }
+.custom-response-row button { width: 44px; min-height: 44px; display: grid; place-items: center; padding: 0; border-color: var(--mood); background: var(--mood); }
+.custom-response-row button svg { width: 18px; height: 18px; }
+.tab { position: relative; }
+.tab.active svg { width: 31px; height: 31px; padding: 6px; border-radius: 50%; background: var(--sex-soft); }
+.tabbar { border-top-color: var(--line-strong); }
+.release-dialog { width: min(calc(100% - 32px), 430px); }
+.release-dialog-content { padding: 28px 24px 24px; }
+.release-mark { width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 18px; border-radius: 50%; background: var(--sex-soft); color: var(--sex); }
+.release-mark svg { width: 23px; height: 23px; }
+.release-dialog h2 { margin-bottom: 22px; font-size: 25px; }
+.release-list { border-top: 1px solid var(--line); }
+.release-list > div { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px; padding: 15px 0; border-bottom: 1px solid var(--line); }
+.release-list > div > svg { width: 20px; height: 20px; margin: 2px 0 0 7px; color: var(--mood); }
+.release-list strong, .release-list small { display: block; }
+.release-list strong { font-size: 14px; }
+.release-list small { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.release-confirm { width: 100%; margin-top: 22px; }
+
+@media (max-width: 430px) {
+  .app-shell { border: 0; }
+  .topbar { min-height: 74px; }
+  .cycle-hero { min-height: 245px; }
+  .today-guidance { padding-right: 16px; padding-left: 16px; }
+  .quick-actions button { min-width: 0; font-size: 13px; }
+  .release-dialog-content { padding: 24px 20px 20px; }
 }

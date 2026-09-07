@@ -3,6 +3,7 @@ const DRAFT_KEY = "cycle-journal-drafts-v1";
 const PRE_V9_BACKUP_KEY = "cycle-journal-pre-v9-backup";
 const SNAPSHOT_DB = "cycle-journal-storage";
 const STORAGE_VERSION = 4;
+const RELEASE_NOTES_KEY = "cycle-journal-release-v13";
 const BACKUP_ITERATIONS = 250000;
 const SYMPTOMS = [
   { id: "bloating", label: "腹胀" }, { id: "acne", label: "痘痘" },
@@ -82,6 +83,8 @@ const elements = {
   partnerResponsePanel: document.querySelector("#partnerResponsePanel"), partnerResponseOptions: document.querySelector("#partnerResponseOptions"),
   partnerResponseHint: document.querySelector("#partnerResponseHint"), responseSettings: document.querySelector("#responseSettings"),
   responseSettingsHint: document.querySelector("#responseSettingsHint"), responsesEnabled: document.querySelector("#responsesEnabledInput"),
+  customResponse: document.querySelector("#customResponseInput"), sendCustomResponse: document.querySelector("#sendCustomResponse"),
+  releaseDialog: document.querySelector("#releaseDialog"), closeReleaseDialog: document.querySelector("#closeReleaseDialog"),
   toast: document.querySelector("#toast")
 };
 
@@ -95,6 +98,7 @@ async function initialize() {
   bindEvents();
   render();
   refreshIcons();
+  window.setTimeout(showReleaseNotes, 500);
   await recoverIndexedSnapshot();
   window.CloudSync?.initialize({
     getSnapshot: () => ({ records: state.records }),
@@ -168,6 +172,9 @@ function bindEvents() {
   document.querySelector("#applyIntimacyMonth").addEventListener("click", applyIntimacyMonth);
   document.querySelector("#closeRecordDetail").addEventListener("click", () => elements.recordDetailDialog.close());
   elements.responsesEnabled.addEventListener("change", changeResponsesEnabled);
+  elements.sendCustomResponse.addEventListener("click", sendCustomPartnerResponse);
+  elements.customResponse.addEventListener("keydown", event => { if (event.key === "Enter") sendCustomPartnerResponse(); });
+  elements.closeReleaseDialog.addEventListener("click", closeReleaseNotes);
 }
 
 function storageKey(baseKey, scope = storageScope) {
@@ -364,9 +371,10 @@ function setPartnerResponseContext(context = {}) {
 
 function replacePartnerResponses(responses = {}) {
   state.partnerResponses = Object.fromEntries(Object.entries(responses).filter(([, response]) =>
-    PARTNER_RESPONSES.some(option => option.id === response?.type)
+    PARTNER_RESPONSES.some(option => option.id === response?.type) || (response?.type === "custom" && response.text)
   ));
   renderTodayResponse();
+  renderCalendar();
   if (elements.recordDialog.open && state.selectedDate) renderResponseBanner(elements.recordFormResponse, dateKey(state.selectedDate));
   if (elements.recordDetailDialog.open && state.detailDate) renderPartnerResponsePanel(state.detailDate, state.records[state.detailDate]);
 }
@@ -545,6 +553,7 @@ function renderCalendar() {
     if (record?.period && record.period !== "none") markers.append(makeMarker("period-marker"));
     if (hasIntimacyRecord(record)) markers.append(makeSexMarker(record));
     if (record?.spotting || record?.painTypes?.length || record?.symptoms?.length || record?.customTags?.length) markers.append(makeMarker("symptom-marker"));
+    if (state.partnerResponses[dateKey(date)]) markers.append(makeMarker("response-marker"));
     button.addEventListener("click", () => openRecordForRole(date)); elements.calendarGrid.append(button);
   }
   renderMonthlyIntimacySummary();
@@ -682,14 +691,18 @@ function recordDetailGroups(record) {
 }
 
 function partnerResponseOption(type) {
+  if (type === "custom") return { id: "custom", label: "", icon: "message-square-heart" };
   return PARTNER_RESPONSES.find(option => option.id === type);
 }
 
 function renderTodayResponse() {
-  renderResponseBanner(elements.todayPartnerResponse, dateKey(new Date()));
+  const todayKey = dateKey(new Date());
+  const latestKey = state.partnerResponses[todayKey] ? todayKey : Object.keys(state.partnerResponses)
+    .sort((a, b) => String(state.partnerResponses[b]?.updatedAt || b).localeCompare(String(state.partnerResponses[a]?.updatedAt || a)))[0];
+  renderResponseBanner(elements.todayPartnerResponse, latestKey, { showDate: latestKey !== todayKey, openRecord: true });
 }
 
-function renderResponseBanner(container, key) {
+function renderResponseBanner(container, key, options = {}) {
   if (!container) return;
   const response = state.partnerResponses[key];
   const option = partnerResponseOption(response?.type);
@@ -700,11 +713,17 @@ function renderResponseBanner(container, key) {
   const glyph = document.createElement("i"); glyph.dataset.lucide = option.icon; icon.append(glyph);
   const copy = document.createElement("span");
   const title = document.createElement("strong");
-  title.textContent = state.cloudRole === "partner" ? `你回应了：${option.label}` : `伴侣回应：${option.label}`;
+  const responseLabel = response.type === "custom" ? response.text : option.label;
+  title.textContent = state.cloudRole === "partner" ? `你回应了：${responseLabel}` : `伴侣回应：${responseLabel}`;
   const time = document.createElement("small");
-  time.textContent = response.updatedAt ? `更新于 ${formatResponseTime(response.updatedAt)}` : "已同步到伴侣空间";
+  const dateLabel = options.showDate ? `${formatShortDate(parseDate(key))} · ` : "";
+  time.textContent = `${dateLabel}${response.updatedAt ? `更新于 ${formatResponseTime(response.updatedAt)}` : "已同步到伴侣空间"}`;
   copy.append(title, time); container.append(icon, copy); queueMicrotask(refreshIcons);
+  container.classList.toggle("clickable", Boolean(options.openRecord && key && state.records[key]));
+  container.onclick = options.openRecord && key && state.records[key] ? () => openRecordForRole(parseDate(key)) : null;
 }
+
+function formatShortDate(date) { return `${date.getMonth() + 1}月${date.getDate()}日`; }
 
 function formatResponseTime(value) {
   const date = new Date(value);
@@ -730,6 +749,10 @@ function renderPartnerResponsePanel(key, record) {
     button.addEventListener("click", () => sendPartnerResponse(key, option.id, button));
     elements.partnerResponseOptions.append(button);
   });
+  const current = state.partnerResponses[key];
+  elements.customResponse.value = current?.type === "custom" ? current.text || "" : "";
+  elements.customResponse.disabled = !enabled;
+  elements.sendCustomResponse.disabled = !enabled;
   queueMicrotask(refreshIcons);
 }
 
@@ -737,13 +760,34 @@ async function sendPartnerResponse(key, type, sourceButton) {
   const selected = state.partnerResponses[key]?.type === type;
   elements.partnerResponseOptions.querySelectorAll("button").forEach(button => { button.disabled = true; });
   sourceButton.classList.add("pending");
-  const success = await window.CloudSync?.setPartnerResponse(key, selected ? null : type);
+  const success = await window.CloudSync?.setPartnerResponse(key, selected ? null : type, null);
   if (!success) {
     showToast("回应未发送，请检查网络后重试");
     renderPartnerResponsePanel(key, state.records[key]);
     return;
   }
   showToast(selected ? "回应已撤回" : "回应已发送");
+}
+
+async function sendCustomPartnerResponse() {
+  const key = state.detailDate;
+  const text = elements.customResponse.value.trim();
+  if (!key || !text) { showToast("先写一句想说的话"); return; }
+  elements.partnerResponseOptions.querySelectorAll("button").forEach(button => { button.disabled = true; });
+  elements.customResponse.disabled = true; elements.sendCustomResponse.disabled = true;
+  const success = await window.CloudSync?.setPartnerResponse(key, "custom", text);
+  if (!success) { showToast("回应未发送，请检查网络后重试"); renderPartnerResponsePanel(key, state.records[key]); return; }
+  showToast("回应已发送");
+}
+
+function showReleaseNotes() {
+  if (localStorage.getItem(RELEASE_NOTES_KEY) || elements.releaseDialog.open) return;
+  if (document.querySelector("dialog[open]")) { window.setTimeout(showReleaseNotes, 1000); return; }
+  elements.releaseDialog.showModal(); queueMicrotask(refreshIcons);
+}
+
+function closeReleaseNotes() {
+  localStorage.setItem(RELEASE_NOTES_KEY, "seen"); elements.releaseDialog.close();
 }
 
 function renderSymptomOptions() {

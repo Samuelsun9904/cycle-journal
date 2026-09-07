@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=12">
+  <link rel="stylesheet" href="styles.css?v=13">
 </head>
 <body>
   <div class="app-shell">
@@ -90,6 +90,7 @@
           <span><i class="legend-sex"></i>同房</span>
           <span><i class="legend-symptom"></i>症状</span>
           <span><i class="legend-predicted"></i>预计</span>
+          <span><i class="legend-response"></i>回应</span>
         </div>
         <div class="calendar-filters" aria-label="日历筛选">
           <button class="filter-button active" data-filter="all" type="button">全部</button>
@@ -362,6 +363,10 @@
       <section class="partner-response-panel" id="partnerResponsePanel" hidden>
         <div class="partner-response-heading"><span><strong>给她一个回应</strong><small id="partnerResponseHint">轻点发送，再点一次即可撤回</small></span><i data-lucide="message-circle-heart"></i></div>
         <div class="partner-response-options" id="partnerResponseOptions"></div>
+        <div class="custom-response-row">
+          <input id="customResponseInput" type="text" maxlength="30" autocomplete="off" placeholder="写一句话，最多 30 字" aria-label="自定义伴侣回应">
+          <button class="primary-button" id="sendCustomResponse" type="button" aria-label="发送自定义回应" title="发送"><i data-lucide="send"></i></button>
+        </div>
       </section>
     </div>
   </dialog>
@@ -447,11 +452,25 @@
     </div>
   </dialog>
 
+  <dialog class="release-dialog" id="releaseDialog">
+    <div class="release-dialog-content">
+      <div class="release-mark"><i data-lucide="sparkles"></i></div>
+      <p class="eyebrow">版本 13</p>
+      <h2>这次更新了什么</h2>
+      <div class="release-list">
+        <div><i data-lucide="message-circle-heart"></i><span><strong>回应更可靠</strong><small>首页显示最近回应，切回应用和手动同步都会刷新。</small></span></div>
+        <div><i data-lucide="pen-line"></i><span><strong>可以自己说一句</strong><small>伴侣可发送不超过 30 字的简短自定义回应。</small></span></div>
+        <div><i data-lucide="palette"></i><span><strong>界面重新整理</strong><small>强化阶段色、日历层次、记录标签和操作反馈。</small></span></div>
+      </div>
+      <button class="primary-button release-confirm" id="closeReleaseDialog" type="button">知道了</button>
+    </div>
+  </dialog>
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="vendor/lucide.min.js?v=11"></script>
   <script src="vendor/supabase.min.js?v=11"></script>
   <script src="config.js?v=11"></script>
-  <script src="cloud.js?v=12"></script>
-  <script src="app.js?v=12"></script>
+  <script src="cloud.js?v=13"></script>
+  <script src="app.js?v=13"></script>
 </body>
 </html>

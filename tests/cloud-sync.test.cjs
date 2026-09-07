@@ -60,7 +60,7 @@ function responsesQuery() {
     range: async (from, to) => ({ data: [...remoteResponses.values()].slice(from, to + 1), error: null }),
     delete() { this.deleting = true; return this; },
     upsert(row) {
-      this.upserted = { response_date: row.response_date, response_type: row.response_type, updated_at: new Date().toISOString() };
+      this.upserted = { response_date: row.response_date, response_type: row.response_type, response_text: row.response_text, updated_at: new Date().toISOString() };
       remoteResponses.set(row.response_date, this.upserted); return this;
     },
     single: async function () { return { data: this.upserted || activeCouple, error: null }; },
@@ -205,6 +205,9 @@ const app = {
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(await context.CloudSync.setPartnerResponse("2026-09-06", "hug"), true);
   assert.equal(responseSnapshot["2026-09-06"].type, "hug");
+  assert.equal(await context.CloudSync.setPartnerResponse("2026-09-06", "custom", "今天早点休息"), true);
+  assert.equal(responseSnapshot["2026-09-06"].text, "今天早点休息");
+  assert.equal(await context.CloudSync.setPartnerResponse("2026-09-06", "custom", ""), false, "empty custom responses must be rejected");
   assert.equal(await context.CloudSync.setPartnerResponse("2026-09-06", null), true);
   assert.equal(responseSnapshot["2026-09-06"], undefined);
 
