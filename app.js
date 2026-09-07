@@ -21,7 +21,9 @@ const DEFAULT_SETTINGS = {
   partnerName: "", partnerMessage: "", partnerShareCycle: true, partnerShareBody: true, partnerShareMood: true
 };
 
-const stored = loadStore();
+let storageScope = "local";
+const stored = loadStore(storageScope);
+let persistedRecordSignatures = recordSignatures(stored.records);
 const state = {
   month: startOfMonth(new Date()), selectedDate: null, records: stored.records,
   settings: stored.settings, calendarFilter: "all", periodRangeOriginal: null,
@@ -86,6 +88,7 @@ async function initialize() {
   window.CloudSync?.initialize({
     getSnapshot: () => ({ records: state.records }),
     replaceRecords,
+    switchStorageScope,
     onRoleChange: applyCloudRole,
     notify: showToast
   });
@@ -153,14 +156,19 @@ function bindEvents() {
   document.querySelector("#closeRecordDetail").addEventListener("click", () => elements.recordDetailDialog.close());
 }
 
-function loadStore() {
+function storageKey(baseKey, scope = storageScope) {
+  return scope === "local" ? baseKey : `${baseKey}:${scope}`;
+}
+
+function loadStore(scope = storageScope, options = {}) {
   const defaults = { records: {}, settings: { ...DEFAULT_SETTINGS } };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey(STORAGE_KEY, scope));
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || typeof parsed.records !== "object") return defaults;
-    if (raw && !localStorage.getItem(PRE_V9_BACKUP_KEY)) {
-      try { localStorage.setItem(PRE_V9_BACKUP_KEY, raw); }
+    const backupKey = storageKey(PRE_V9_BACKUP_KEY, scope);
+    if (options.createBackup !== false && raw && !localStorage.getItem(backupKey)) {
+      try { localStorage.setItem(backupKey, raw); }
       catch (error) { console.warn("Pre-v9 backup could not be stored", error); }
     }
     const records = Object.fromEntries(Object.entries(parsed.records).map(([key, record]) => [key, normalizeRecord(record)]));
@@ -193,9 +201,22 @@ function normalizeRecord(record = {}) {
 
 function persist(options = {}) {
   const snapshot = { version: STORAGE_VERSION, records: state.records, settings: state.settings };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
-  saveIndexedSnapshot(snapshot);
-  if (options.cloud !== false) window.CloudSync?.schedulePush();
+  const nextSignatures = recordSignatures(state.records);
+  const changedDates = changedRecordDates(persistedRecordSignatures, nextSignatures);
+  localStorage.setItem(storageKey(STORAGE_KEY), JSON.stringify(snapshot));
+  persistedRecordSignatures = nextSignatures;
+  const snapshotPromise = saveIndexedSnapshot(snapshot);
+  if (options.cloud !== false && changedDates.length) window.CloudSync?.schedulePush(changedDates);
+  return snapshotPromise;
+}
+
+function recordSignatures(records) {
+  return new Map(Object.entries(records || {}).map(([key, record]) => [key, JSON.stringify(record)]));
+}
+
+function changedRecordDates(previous, next) {
+  const dates = new Set([...previous.keys(), ...next.keys()]);
+  return [...dates].filter(key => previous.get(key) !== next.get(key));
 }
 
 function openSnapshotDb() {
@@ -207,29 +228,56 @@ function openSnapshotDb() {
   });
 }
 
-async function saveIndexedSnapshot(snapshot) {
+async function saveIndexedSnapshot(snapshot, scope = storageScope) {
   try {
     const db = await openSnapshotDb();
-    const transaction = db.transaction("snapshots", "readwrite");
-    transaction.objectStore("snapshots").put(snapshot, "latest");
-    transaction.oncomplete = () => db.close();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction("snapshots", "readwrite");
+      transaction.objectStore("snapshots").put(snapshot, scope);
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+    db.close();
   } catch (error) { console.warn("IndexedDB snapshot failed", error); }
+}
+
+async function deleteIndexedSnapshot(key) {
+  try {
+    const db = await openSnapshotDb();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction("snapshots", "readwrite");
+      transaction.objectStore("snapshots").delete(key);
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+    db.close();
+  } catch (error) { console.warn("IndexedDB snapshot cleanup failed", error); }
 }
 
 async function recoverIndexedSnapshot() {
   try {
     const db = await openSnapshotDb();
     const snapshot = await new Promise((resolve, reject) => {
-      const request = db.transaction("snapshots").objectStore("snapshots").get("latest");
+      const store = db.transaction("snapshots").objectStore("snapshots");
+      const request = store.get(storageScope);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
+    let recovered = snapshot;
+    if (!recovered && storageScope === "local") {
+      recovered = await new Promise((resolve, reject) => {
+        const request = db.transaction("snapshots").objectStore("snapshots").get("latest");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    }
     db.close();
-    if (!Object.keys(state.records).length && snapshot?.records && Object.keys(snapshot.records).length) {
-      state.records = normalizeRecords(snapshot.records);
-      state.settings = { ...DEFAULT_SETTINGS, ...(snapshot.settings || {}) };
+    if (!Object.keys(state.records).length && recovered?.records && Object.keys(recovered.records).length) {
+      state.records = normalizeRecords(recovered.records);
+      state.settings = { ...DEFAULT_SETTINGS, ...(recovered.settings || {}) };
+      persistedRecordSignatures = recordSignatures(state.records);
       persist({ cloud: false }); render(); showToast("已从设备快照恢复记录");
-    } else if (!snapshot) saveIndexedSnapshot({ version: STORAGE_VERSION, records: state.records, settings: state.settings });
+    } else if (!recovered) saveIndexedSnapshot({ version: STORAGE_VERSION, records: state.records, settings: state.settings });
   } catch (error) { console.warn("IndexedDB recovery failed", error); }
 }
 
@@ -240,6 +288,42 @@ function normalizeRecords(records) {
 async function replaceRecords(records) {
   state.records = normalizeRecords(records);
   persist({ cloud: false }); render();
+}
+
+async function switchStorageScope(nextScope, options = {}) {
+  if (!nextScope || nextScope === storageScope) return { adopted: false };
+  const previousScope = storageScope;
+  const previousSnapshot = { version: STORAGE_VERSION, records: state.records, settings: state.settings };
+  const targetKey = storageKey(STORAGE_KEY, nextScope);
+  const targetExists = Boolean(localStorage.getItem(targetKey));
+  const adopted = Boolean(options.adoptCurrent && !targetExists);
+
+  if (adopted) {
+    localStorage.setItem(targetKey, JSON.stringify(previousSnapshot));
+    const previousDrafts = localStorage.getItem(storageKey(DRAFT_KEY, previousScope));
+    if (previousDrafts) localStorage.setItem(storageKey(DRAFT_KEY, nextScope), previousDrafts);
+    const previousBackup = localStorage.getItem(storageKey(PRE_V9_BACKUP_KEY, previousScope));
+    if (previousBackup) localStorage.setItem(storageKey(PRE_V9_BACKUP_KEY, nextScope), previousBackup);
+  }
+
+  if (options.clearSource && (adopted || options.forceClearSource)) {
+    const emptySnapshot = { version: STORAGE_VERSION, records: {}, settings: { ...DEFAULT_SETTINGS } };
+    localStorage.setItem(storageKey(STORAGE_KEY, previousScope), JSON.stringify(emptySnapshot));
+    localStorage.removeItem(storageKey(DRAFT_KEY, previousScope));
+    localStorage.removeItem(storageKey(PRE_V9_BACKUP_KEY, previousScope));
+    await saveIndexedSnapshot(emptySnapshot, previousScope);
+    if (previousScope === "local") await deleteIndexedSnapshot("latest");
+  }
+
+  storageScope = nextScope;
+  const storedScope = loadStore(nextScope);
+  state.records = normalizeRecords(storedScope.records);
+  state.settings = { ...DEFAULT_SETTINGS, ...storedScope.settings };
+  persistedRecordSignatures = recordSignatures(state.records);
+  await saveIndexedSnapshot({ version: STORAGE_VERSION, records: state.records, settings: state.settings });
+  if (elements.recordDialog.open) elements.recordDialog.close();
+  render();
+  return { adopted };
 }
 
 function applyCloudRole(role) {
@@ -659,7 +743,7 @@ function collectRecordForm() {
 }
 
 function loadDrafts() {
-  try { return JSON.parse(localStorage.getItem(DRAFT_KEY)) || {}; }
+  try { return JSON.parse(localStorage.getItem(storageKey(DRAFT_KEY))) || {}; }
   catch { return {}; }
 }
 
@@ -668,11 +752,11 @@ function loadRecordDraft(key) { return loadDrafts()[key] ? normalizeRecord(loadD
 function saveRecordDraft() {
   if (!state.selectedDate || !elements.recordDialog.open) return;
   const drafts = loadDrafts(); drafts[dateKey(state.selectedDate)] = collectRecordForm();
-  localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts));
+  localStorage.setItem(storageKey(DRAFT_KEY), JSON.stringify(drafts));
 }
 
 function clearRecordDraft(key) {
-  const drafts = loadDrafts(); delete drafts[key]; localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts));
+  const drafts = loadDrafts(); delete drafts[key]; localStorage.setItem(storageKey(DRAFT_KEY), JSON.stringify(drafts));
 }
 
 function saveCurrentRecord() {
@@ -1190,7 +1274,17 @@ function exportPredictionCalendar() {
 }
 function calendarDate(date) { return dateKey(date).replaceAll("-", ""); }
 
-function clearAllData() { state.records = {}; state.settings = { ...DEFAULT_SETTINGS }; persist(); render(); showToast("全部数据已清除"); }
+async function clearAllData() {
+  state.records = {};
+  state.settings = { ...DEFAULT_SETTINGS };
+  localStorage.removeItem(storageKey(DRAFT_KEY));
+  localStorage.removeItem(storageKey(PRE_V9_BACKUP_KEY));
+  await persist();
+  await deleteIndexedSnapshot("latest");
+  render();
+  const synced = state.cloudRole === "owner" ? await window.CloudSync?.syncNow() : true;
+  showToast(synced === false ? "本机已清除，云端将在联网后清除" : "全部数据已清除");
+}
 function showView(viewId) {
   document.querySelectorAll(".view").forEach(view => view.classList.toggle("active", view.id === viewId));
   document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab.dataset.view === viewId));

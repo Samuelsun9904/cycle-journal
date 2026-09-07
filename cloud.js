@@ -1,5 +1,9 @@
 (() => {
-  const META_KEY = "cycle-journal-cloud-meta-v1";
+  const LEGACY_META_KEY = "cycle-journal-cloud-meta-v1";
+  const META_PREFIX = "cycle-journal-cloud-meta-v2";
+  const MIGRATION_OWNER_KEY = "cycle-journal-cloud-migration-owner-v2";
+  const PAGE_SIZE = 500;
+  const RETRY_DELAYS = [2000, 5000, 15000, 30000];
   const config = window.CYCLE_JOURNAL_CONFIG || {};
   const configured = Boolean(config.supabaseUrl && config.supabasePublishableKey && window.supabase?.createClient);
   const client = configured ? window.supabase.createClient(config.supabaseUrl, config.supabasePublishableKey, {
@@ -12,20 +16,53 @@
   let role = "local";
   let channel;
   let syncTimer;
-  let syncing = false;
-
+  let retryTimer;
+  let retryAttempt = 0;
+  let contextVersion = 0;
+  let mutationVersion = 0;
+  let syncPromise;
+  let pushRequested = false;
+  let pullRequested = false;
+  let legacyAuthoritative = false;
+  let legacyMerge = false;
+  let protectEmptyRemote = false;
+  const dirtyVersions = new Map();
   const ui = {};
 
+  function currentMetaKey() { return couple ? `${META_PREFIX}:${couple.id}` : null; }
+
   function readMeta() {
-    try { return { pending: false, ...JSON.parse(localStorage.getItem(META_KEY)) }; }
-    catch { return { pending: false }; }
+    const key = currentMetaKey();
+    if (!key) return { pendingDates: [] };
+    try {
+      const parsed = JSON.parse(localStorage.getItem(key));
+      return { pendingDates: [], ...(parsed && typeof parsed === "object" ? parsed : {}) };
+    } catch { return { pendingDates: [] }; }
   }
 
-  function writeMeta(value) { localStorage.setItem(META_KEY, JSON.stringify({ ...readMeta(), ...value })); }
+  function writeMeta(value) {
+    const key = currentMetaKey();
+    if (!key) return;
+    localStorage.setItem(key, JSON.stringify({ ...readMeta(), ...value }));
+  }
+
+  function claimLegacyData(userId) {
+    const claimedBy = localStorage.getItem(MIGRATION_OWNER_KEY);
+    if (claimedBy) return claimedBy === userId;
+    localStorage.setItem(MIGRATION_OWNER_KEY, userId);
+    return true;
+  }
+
+  function readLegacyMeta() {
+    try { return JSON.parse(localStorage.getItem(LEGACY_META_KEY)) || {}; }
+    catch { return {}; }
+  }
 
   async function initialize(callbacks) {
     app = callbacks;
     bindUi();
+    window.addEventListener("online", retryPendingSync);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) retryPendingSync(); });
     if (!configured) {
       setStatus("云同步尚未配置", "idle");
       ui.signedOut.hidden = false;
@@ -106,8 +143,25 @@
     app.notify("注册并登录成功");
   }
 
+  function resetSyncContext() {
+    contextVersion += 1;
+    clearTimeout(syncTimer);
+    clearTimeout(retryTimer);
+    syncTimer = null;
+    retryTimer = null;
+    retryAttempt = 0;
+    pushRequested = false;
+    pullRequested = false;
+    legacyAuthoritative = false;
+    legacyMerge = false;
+    protectEmptyRemote = false;
+    dirtyVersions.clear();
+  }
+
   async function applySession(nextSession) {
-    if (session?.user?.id === nextSession?.user?.id && couple) return;
+    const sameUser = session?.user?.id && session.user.id === nextSession?.user?.id;
+    if (sameUser && (couple || role === "unpaired")) return;
+    resetSyncContext();
     session = nextSession;
     couple = null;
     await removeChannel();
@@ -116,23 +170,50 @@
     clearError();
     if (!session) {
       role = "local";
+      await app.switchStorageScope("local");
       setStatus("未登录，仅保存在当前设备", "idle");
       app.onRoleChange(role);
       renderCouple();
       return;
     }
+
+    const activeContext = contextVersion;
+    const canAdoptLegacy = claimLegacyData(session.user.id);
+    const legacyMeta = canAdoptLegacy ? readLegacyMeta() : {};
+    role = "unpaired";
+    const userScopeResult = await app.switchStorageScope(`user:${session.user.id}`, {
+      adoptCurrent: canAdoptLegacy,
+      clearSource: canAdoptLegacy,
+      forceClearSource: canAdoptLegacy
+    });
+    app.onRoleChange(role);
     ui.accountEmail.textContent = session.user.email || "已登录";
     setStatus("正在读取云端数据", "syncing");
     const { data, error } = await client.from("couples").select("*")
       .or(`owner_id.eq.${session.user.id},partner_id.eq.${session.user.id}`).maybeSingle();
-    if (error) { setError(error); setStatus("云端连接失败", "error"); return; }
+    if (activeContext !== contextVersion) return;
+    if (error) { setError(error); setStatus("云端连接失败，稍后重试", "error"); scheduleSessionRetry(); return; }
+
     couple = data;
-    role = couple ? (couple.owner_id === session.user.id ? "owner" : "partner") : "unpaired";
+    if (!couple) {
+      renderCouple();
+      setStatus("已登录，等待创建或加入空间", "ready");
+      if (canAdoptLegacy) localStorage.removeItem(LEGACY_META_KEY);
+      return;
+    }
+
+    role = couple.owner_id === session.user.id ? "owner" : "partner";
+    await app.switchStorageScope(`couple:${couple.id}`, role === "owner" ? { adoptCurrent: true, clearSource: true } : {});
+    protectEmptyRemote = role === "owner";
+    hydrateDirtyDates();
     app.onRoleChange(role);
     renderCouple();
-    if (!couple) { setStatus("已登录，等待创建或加入空间", "ready"); return; }
-    await initialSync();
-    subscribe();
+    const synced = await initialSync({
+      legacyPending: Boolean(canAdoptLegacy && legacyMeta.pending),
+      migratedLegacy: Boolean(canAdoptLegacy && userScopeResult?.adopted)
+    });
+    if (canAdoptLegacy && synced) localStorage.removeItem(LEGACY_META_KEY);
+    await subscribe();
   }
 
   function renderCouple() {
@@ -156,10 +237,15 @@
     const expires = new Date(Date.now() + 7 * 86400000).toISOString();
     const { data, error } = await client.from("couples").insert({ owner_id: session.user.id, invite_code: inviteCode, invite_expires_at: expires }).select().single();
     if (error) { setError(error); return; }
-    couple = data; role = "owner"; app.onRoleChange(role); renderCouple();
-    writeMeta({ pending: true });
+    resetSyncContext();
+    couple = data;
+    role = "owner";
+    await app.switchStorageScope(`couple:${couple.id}`, { adoptCurrent: true, clearSource: true });
+    markDirty(Object.keys(app.getSnapshot().records));
+    app.onRoleChange(role);
+    renderCouple();
     await syncNow(true);
-    subscribe();
+    await subscribe();
   }
 
   async function joinCouple() {
@@ -168,77 +254,238 @@
     if (!/^[A-Z2-9]{8}$/.test(code)) { ui.error.textContent = "请输入 8 位邀请码。"; return; }
     const { data, error } = await client.rpc("join_couple", { supplied_code: code });
     if (error) { setError(error); return; }
-    couple = data; role = "partner"; app.onRoleChange(role); renderCouple();
-    await pullRemote(); subscribe(); app.notify("已加入伴侣空间");
+    resetSyncContext();
+    couple = data;
+    role = "partner";
+    await app.switchStorageScope(`couple:${couple.id}`);
+    app.onRoleChange(role);
+    renderCouple();
+    const synced = await syncNow();
+    if (synced) app.notify("已加入伴侣空间");
+    await subscribe();
   }
 
-  async function initialSync() {
-    if (role === "partner") { await pullRemote(); return; }
-    const { count, error } = await client.from("daily_records").select("record_date", { count: "exact", head: true }).eq("couple_id", couple.id);
-    if (error) { setError(error); return; }
-    const localHasRecords = Object.keys(app.getSnapshot().records).length > 0;
-    if (readMeta().pending || (!count && localHasRecords)) await pushRemote();
-    else await pullRemote();
+  function hydrateDirtyDates() {
+    dirtyVersions.clear();
+    const meta = readMeta();
+    const dates = Array.isArray(meta.pendingDates) ? meta.pendingDates : [];
+    dates.forEach(date => dirtyVersions.set(date, ++mutationVersion));
   }
 
-  function schedulePush() {
-    if (role === "partner") return;
-    writeMeta({ pending: true });
+  function markDirty(dates) {
+    [...new Set(dates || [])].filter(Boolean).forEach(date => dirtyVersions.set(date, ++mutationVersion));
+    writeMeta({ pendingDates: [...dirtyVersions.keys()] });
+  }
+
+  async function initialSync(options = {}) {
+    if (role === "partner") { pullRequested = true; return drainSync(); }
+    legacyAuthoritative = Boolean(options.legacyPending);
+    legacyMerge = Boolean(options.migratedLegacy && !options.legacyPending);
+    pullRequested = true;
+    if (dirtyVersions.size) pushRequested = true;
+    return drainSync();
+  }
+
+  function schedulePush(changedDates = []) {
+    if (role === "partner" || !changedDates.length) return;
     if (role !== "owner" || !couple) return;
+    markDirty(changedDates);
+    pushRequested = true;
     clearTimeout(syncTimer);
-    syncTimer = window.setTimeout(pushRemote, 700);
+    syncTimer = window.setTimeout(() => { syncTimer = null; drainSync(); }, 700);
   }
 
   async function syncNow(userInitiated = false) {
-    if (!couple || syncing) return;
-    if (role === "owner") await pushRemote(); else await pullRemote();
-    if (userInitiated && !ui.error.textContent) app.notify("同步完成");
+    if (!couple) return false;
+    clearTimeout(syncTimer);
+    clearTimeout(retryTimer);
+    syncTimer = null;
+    retryTimer = null;
+    if (role === "owner" && dirtyVersions.size) pushRequested = true;
+    pullRequested = true;
+    const success = await drainSync();
+    if (userInitiated && success) app.notify("同步完成");
+    return success;
   }
 
-  async function pushRemote() {
-    if (role !== "owner" || !couple || syncing) return;
-    syncing = true; clearError(); setStatus("正在同步", "syncing");
-    try {
-      const records = app.getSnapshot().records;
-      const rows = Object.entries(records).map(([record_date, payload]) => ({ couple_id: couple.id, record_date, payload, deleted_at: null }));
-      if (rows.length) {
-        const { error } = await client.from("daily_records").upsert(rows, { onConflict: "couple_id,record_date" });
-        if (error) throw error;
-      }
-      const { data: remoteRows, error: listError } = await client.from("daily_records").select("record_date,deleted_at").eq("couple_id", couple.id);
-      if (listError) throw listError;
-      const stale = (remoteRows || []).filter(row => !row.deleted_at && !records[row.record_date]).map(row => row.record_date);
-      if (stale.length) {
-        const { error } = await client.from("daily_records").update({ deleted_at: new Date().toISOString() }).eq("couple_id", couple.id).in("record_date", stale);
-        if (error) throw error;
-      }
-      writeMeta({ pending: false, lastSyncAt: new Date().toISOString() });
-      setStatus("所有记录已同步", "ready");
-    } catch (error) { setError(error); setStatus("等待网络后重试", "error"); }
-    finally { syncing = false; }
+  function retryPendingSync() {
+    if (!couple || !navigator.onLine) return;
+    clearTimeout(retryTimer);
+    retryTimer = null;
+    if (role === "owner" && dirtyVersions.size) pushRequested = true;
+    pullRequested = true;
+    drainSync();
   }
 
-  async function pullRemote() {
-    if (!couple || syncing) return;
-    syncing = true; clearError(); setStatus("正在接收记录", "syncing");
-    try {
-      const { data, error } = await client.from("daily_records").select("record_date,payload,deleted_at").eq("couple_id", couple.id).order("record_date");
+  function scheduleRetry(failedOperation) {
+    if (!couple || retryTimer) return;
+    if (failedOperation === "push") pushRequested = true;
+    else pullRequested = true;
+    const delay = RETRY_DELAYS[Math.min(retryAttempt, RETRY_DELAYS.length - 1)];
+    retryAttempt += 1;
+    retryTimer = window.setTimeout(() => {
+      retryTimer = null;
+      drainSync();
+    }, delay);
+  }
+
+  function scheduleSessionRetry() {
+    if (!session || retryTimer) return;
+    const retrySession = session;
+    const delay = RETRY_DELAYS[Math.min(retryAttempt, RETRY_DELAYS.length - 1)];
+    retryAttempt += 1;
+    retryTimer = window.setTimeout(() => {
+      retryTimer = null;
+      session = null;
+      applySession(retrySession);
+    }, delay);
+  }
+
+  async function drainSync() {
+    if (syncPromise) return syncPromise;
+    const activeContext = contextVersion;
+    syncPromise = (async () => {
+      let success = true;
+      while (activeContext === contextVersion && couple && (pushRequested || pullRequested)) {
+        const operation = role === "owner" && pushRequested ? "push" : "pull";
+        if (operation === "push") pushRequested = false;
+        else pullRequested = false;
+        clearError();
+        setStatus(operation === "push" ? "正在同步" : "正在接收记录", "syncing");
+        try {
+          if (operation === "push") await pushRemoteOnce(activeContext);
+          else await pullRemoteOnce(activeContext);
+          clearTimeout(retryTimer);
+          retryTimer = null;
+          retryAttempt = 0;
+        } catch (error) {
+          if (activeContext !== contextVersion) break;
+          success = false;
+          setError(error);
+          setStatus(operation === "push" ? "等待网络后重试" : "无法读取云端记录，稍后重试", "error");
+          scheduleRetry(operation);
+          break;
+        }
+      }
+      return success && activeContext === contextVersion;
+    })();
+    const currentPromise = syncPromise;
+    try { return await currentPromise; }
+    finally {
+      if (syncPromise === currentPromise) syncPromise = null;
+      if ((pushRequested || pullRequested) && !retryTimer && couple) queueMicrotask(drainSync);
+    }
+  }
+
+  async function pushRemoteOnce(activeContext) {
+    if (role !== "owner" || !couple || !dirtyVersions.size) return;
+    const coupleId = couple.id;
+    const captured = new Map(dirtyVersions);
+    const records = app.getSnapshot().records;
+    const deletedAt = new Date().toISOString();
+    const rows = [...captured.keys()].map(recordDate => ({
+      couple_id: coupleId,
+      record_date: recordDate,
+      payload: records[recordDate] ? JSON.parse(JSON.stringify(records[recordDate])) : null,
+      deleted_at: records[recordDate] ? null : deletedAt
+    }));
+
+    for (let offset = 0; offset < rows.length; offset += PAGE_SIZE) {
+      const { error } = await client.from("daily_records").upsert(rows.slice(offset, offset + PAGE_SIZE), { onConflict: "couple_id,record_date" });
       if (error) throw error;
-      const records = Object.fromEntries((data || []).filter(row => !row.deleted_at).map(row => [row.record_date, row.payload]));
-      await app.replaceRecords(records);
-      writeMeta({ pending: false, lastSyncAt: new Date().toISOString() });
-      setStatus("实时同步已连接", "ready");
-    } catch (error) { setError(error); setStatus("无法读取云端记录", "error"); }
-    finally { syncing = false; }
+    }
+    if (activeContext !== contextVersion || couple?.id !== coupleId) return;
+    captured.forEach((version, date) => {
+      if (dirtyVersions.get(date) === version) dirtyVersions.delete(date);
+    });
+    writeMeta({ pendingDates: [...dirtyVersions.keys()], lastSyncAt: new Date().toISOString() });
+    setStatus(dirtyVersions.size ? "还有记录等待同步" : "所有记录已同步", dirtyVersions.size ? "syncing" : "ready");
+    if (dirtyVersions.size) pushRequested = true;
   }
 
-  function subscribe() {
-    removeChannel();
+  async function fetchAllRecords() {
+    if (!couple) return [];
+    const rows = [];
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await client.from("daily_records")
+        .select("record_date,payload,deleted_at,updated_at")
+        .eq("couple_id", couple.id)
+        .order("record_date", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) throw error;
+      rows.push(...(data || []));
+      if (!data || data.length < PAGE_SIZE) return rows;
+    }
+  }
+
+  async function pullRemoteOnce(activeContext) {
+    if (!couple) return;
+    const coupleId = couple.id;
+    const rows = await fetchAllRecords();
+    if (activeContext !== contextVersion || couple?.id !== coupleId) return;
+    const records = Object.fromEntries(rows
+      .filter(row => !row.deleted_at && row.payload && typeof row.payload === "object")
+      .map(row => [row.record_date, row.payload]));
+
+    if (role === "owner" && protectEmptyRemote && rows.length === 0) {
+      const localDates = Object.keys(app.getSnapshot().records);
+      if (localDates.length) markDirty(localDates);
+    }
+    protectEmptyRemote = false;
+    if (role === "owner" && legacyAuthoritative) {
+      const dates = new Set([...Object.keys(app.getSnapshot().records), ...rows.filter(row => !row.deleted_at).map(row => row.record_date)]);
+      markDirty([...dates]);
+      legacyAuthoritative = false;
+    } else if (role === "owner" && legacyMerge) {
+      markDirty(Object.keys(app.getSnapshot().records));
+      legacyMerge = false;
+    }
+    if (role === "owner" && dirtyVersions.size) {
+      const localRecords = app.getSnapshot().records;
+      dirtyVersions.forEach((_version, date) => {
+        if (localRecords[date]) records[date] = localRecords[date];
+        else delete records[date];
+      });
+    }
+    if (role === "owner") await sanitizeTombstones(coupleId, rows);
+
+    await app.replaceRecords(records);
+    writeMeta({ pendingDates: [...dirtyVersions.keys()], lastSyncAt: new Date().toISOString() });
+    setStatus(role === "partner" ? "实时同步已连接" : dirtyVersions.size ? "还有记录等待同步" : "所有记录已同步", dirtyVersions.size ? "syncing" : "ready");
+    if (role === "owner" && dirtyVersions.size) pushRequested = true;
+  }
+
+  async function sanitizeTombstones(coupleId, rows) {
+    const dates = rows.filter(row => row.deleted_at && row.payload !== null).map(row => row.record_date);
+    for (let offset = 0; offset < dates.length; offset += PAGE_SIZE) {
+      const { error } = await client.from("daily_records")
+        .update({ payload: null })
+        .eq("couple_id", coupleId)
+        .in("record_date", dates.slice(offset, offset + PAGE_SIZE))
+        .not("deleted_at", "is", null);
+      if (error) throw error;
+    }
+  }
+
+  async function subscribe() {
+    await removeChannel();
+    if (!couple) return;
+    const activeContext = contextVersion;
     channel = client.channel(`records:${couple.id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "daily_records", filter: `couple_id=eq.${couple.id}` }, () => {
-        if (!syncing) window.setTimeout(pullRemote, 120);
+        if (activeContext !== contextVersion) return;
+        pullRequested = true;
+        window.setTimeout(drainSync, 120);
       }).subscribe(status => {
-        if (status === "SUBSCRIBED") setStatus("实时同步已连接", "ready");
+        if (activeContext !== contextVersion) return;
+        if (status === "SUBSCRIBED") {
+          pullRequested = true;
+          drainSync();
+        }
+        if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) {
+          setStatus("实时连接中断，正在重连", "error");
+          scheduleRetry("pull");
+        }
       });
   }
 
