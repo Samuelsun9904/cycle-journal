@@ -11,6 +11,9 @@ create table if not exists public.couples (
   constraint different_members check (partner_id is null or partner_id <> owner_id)
 );
 
+alter table public.couples
+  add column if not exists responses_enabled boolean not null default true;
+
 create table if not exists public.daily_records (
   couple_id uuid not null references public.couples(id) on delete cascade,
   record_date date not null,
@@ -18,6 +21,16 @@ create table if not exists public.daily_records (
   deleted_at timestamptz,
   updated_at timestamptz not null default now(),
   primary key (couple_id, record_date)
+);
+
+create table if not exists public.partner_responses (
+  couple_id uuid not null references public.couples(id) on delete cascade,
+  response_date date not null,
+  responder_id uuid not null references auth.users(id) on delete cascade,
+  response_type text not null check (response_type in ('seen', 'hug', 'care', 'prepare')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (couple_id, response_date)
 );
 
 create or replace function public.touch_daily_record()
@@ -32,8 +45,13 @@ drop trigger if exists daily_records_touch_updated_at on public.daily_records;
 create trigger daily_records_touch_updated_at before update on public.daily_records
 for each row execute function public.touch_daily_record();
 
+drop trigger if exists partner_responses_touch_updated_at on public.partner_responses;
+create trigger partner_responses_touch_updated_at before update on public.partner_responses
+for each row execute function public.touch_daily_record();
+
 alter table public.couples enable row level security;
 alter table public.daily_records enable row level security;
+alter table public.partner_responses enable row level security;
 
 drop policy if exists "members can read their couple" on public.couples;
 create policy "members can read their couple" on public.couples for select to authenticated
@@ -72,6 +90,42 @@ using (exists (
   where c.id = daily_records.couple_id and c.owner_id = auth.uid()
 ));
 
+drop policy if exists "members can read partner responses" on public.partner_responses;
+create policy "members can read partner responses" on public.partner_responses for select to authenticated
+using (exists (
+  select 1 from public.couples c
+  where c.id = partner_responses.couple_id
+    and (c.owner_id = auth.uid() or c.partner_id = auth.uid())
+));
+
+drop policy if exists "partner can insert responses" on public.partner_responses;
+create policy "partner can insert responses" on public.partner_responses for insert to authenticated
+with check (
+  responder_id = auth.uid() and exists (
+    select 1 from public.couples c
+    join public.daily_records r on r.couple_id = c.id and r.record_date = partner_responses.response_date
+    where c.id = partner_responses.couple_id and c.partner_id = auth.uid()
+      and c.responses_enabled and r.deleted_at is null and r.payload is not null
+  )
+);
+
+drop policy if exists "partner can update responses" on public.partner_responses;
+create policy "partner can update responses" on public.partner_responses for update to authenticated
+using (responder_id = auth.uid() and exists (
+  select 1 from public.couples c
+  where c.id = partner_responses.couple_id and c.partner_id = auth.uid() and c.responses_enabled
+)) with check (responder_id = auth.uid() and exists (
+  select 1 from public.couples c
+  where c.id = partner_responses.couple_id and c.partner_id = auth.uid() and c.responses_enabled
+));
+
+drop policy if exists "partner can delete responses" on public.partner_responses;
+create policy "partner can delete responses" on public.partner_responses for delete to authenticated
+using (responder_id = auth.uid() and exists (
+  select 1 from public.couples c
+  where c.id = partner_responses.couple_id and c.partner_id = auth.uid()
+));
+
 create or replace function public.join_couple(supplied_code text)
 returns public.couples
 language plpgsql
@@ -100,9 +154,22 @@ revoke all on function public.join_couple(text) from public;
 grant execute on function public.join_couple(text) to authenticated;
 grant select, insert, update on public.couples to authenticated;
 grant select, insert, update on public.daily_records to authenticated;
+grant select, insert, update, delete on public.partner_responses to authenticated;
 
 do $$
 begin
   alter publication supabase_realtime add table public.daily_records;
+exception when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table public.couples;
+exception when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table public.partner_responses;
 exception when duplicate_object then null;
 end $$;

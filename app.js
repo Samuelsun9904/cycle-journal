@@ -15,6 +15,12 @@ const PAIN_TYPES = [
   { id: "breast", label: "乳房胀痛", icon: "heart-pulse" }, { id: "headache", label: "头痛", icon: "brain" },
   { id: "backache", label: "腰背痛", icon: "accessibility" }, { id: "joint", label: "关节酸痛", icon: "bone" }
 ];
+const PARTNER_RESPONSES = [
+  { id: "seen", label: "看到了", icon: "check" },
+  { id: "hug", label: "抱抱你", icon: "heart" },
+  { id: "care", label: "今晚我来照顾你", icon: "sparkles" },
+  { id: "prepare", label: "需要我准备什么？", icon: "circle-help" }
+];
 const LEGACY_PAIN_IDS = new Set(["cramps", "headache", "backache", "breast"]);
 const DEFAULT_SETTINGS = {
   lastBackupAt: null, reminderEnabled: false, reminderDays: 1, reminderTime: "09:00", lastReminderKey: null,
@@ -28,7 +34,8 @@ const state = {
   month: startOfMonth(new Date()), selectedDate: null, records: stored.records,
   settings: stored.settings, calendarFilter: "all", periodRangeOriginal: null,
   pendingImport: null, backupMode: "export", intimacyMode: "count", sexCount: 0, sexMinutes: 0,
-  partnerSummaryBlob: null, cloudRole: "local"
+  partnerSummaryBlob: null, cloudRole: "local", partnerResponses: {},
+  responsesEnabled: false, responsesAvailable: false, responsesPaired: false, detailDate: null
 };
 
 const elements = {
@@ -71,6 +78,10 @@ const elements = {
   recordDetailDialog: document.querySelector("#recordDetailDialog"), recordDetailTitle: document.querySelector("#recordDetailTitle"),
   recordDetailBody: document.querySelector("#recordDetailBody"), monthPickerDialog: document.querySelector("#monthPickerDialog"),
   intimacyYearSelect: document.querySelector("#intimacyYearSelect"), intimacyMonthSelect: document.querySelector("#intimacyMonthSelect"),
+  todayPartnerResponse: document.querySelector("#todayPartnerResponse"), recordFormResponse: document.querySelector("#recordFormResponse"),
+  partnerResponsePanel: document.querySelector("#partnerResponsePanel"), partnerResponseOptions: document.querySelector("#partnerResponseOptions"),
+  partnerResponseHint: document.querySelector("#partnerResponseHint"), responseSettings: document.querySelector("#responseSettings"),
+  responseSettingsHint: document.querySelector("#responseSettingsHint"), responsesEnabled: document.querySelector("#responsesEnabledInput"),
   toast: document.querySelector("#toast")
 };
 
@@ -89,6 +100,8 @@ async function initialize() {
     getSnapshot: () => ({ records: state.records }),
     replaceRecords,
     switchStorageScope,
+    replacePartnerResponses,
+    setPartnerResponseContext,
     onRoleChange: applyCloudRole,
     notify: showToast
   });
@@ -154,6 +167,7 @@ function bindEvents() {
   elements.intimacyMonthLabel.addEventListener("click", openMonthPicker);
   document.querySelector("#applyIntimacyMonth").addEventListener("click", applyIntimacyMonth);
   document.querySelector("#closeRecordDetail").addEventListener("click", () => elements.recordDetailDialog.close());
+  elements.responsesEnabled.addEventListener("change", changeResponsesEnabled);
 }
 
 function storageKey(baseKey, scope = storageScope) {
@@ -336,6 +350,25 @@ function applyCloudRole(role) {
   const todayButton = document.querySelector("#editTodayButton");
   todayButton.disabled = false; todayButton.textContent = readOnly ? "查看" : "编辑";
   if (readOnly && elements.recordDialog.open) elements.recordDialog.close();
+  renderResponseSettings();
+}
+
+function setPartnerResponseContext(context = {}) {
+  state.responsesEnabled = Boolean(context.enabled);
+  state.responsesAvailable = Boolean(context.available);
+  state.responsesPaired = Boolean(context.paired);
+  renderResponseSettings();
+  renderTodayResponse();
+  if (elements.recordDetailDialog.open && state.detailDate) renderPartnerResponsePanel(state.detailDate, state.records[state.detailDate]);
+}
+
+function replacePartnerResponses(responses = {}) {
+  state.partnerResponses = Object.fromEntries(Object.entries(responses).filter(([, response]) =>
+    PARTNER_RESPONSES.some(option => option.id === response?.type)
+  ));
+  renderTodayResponse();
+  if (elements.recordDialog.open && state.selectedDate) renderResponseBanner(elements.recordFormResponse, dateKey(state.selectedDate));
+  if (elements.recordDetailDialog.open && state.detailDate) renderPartnerResponsePanel(state.detailDate, state.records[state.detailDate]);
 }
 function dateKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -350,7 +383,7 @@ function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
 
 function changeMonth(offset) { state.month = new Date(state.month.getFullYear(), state.month.getMonth() + offset, 1, 12); renderCalendar(); }
 function render() {
-  renderToday(); renderCalendar(); renderInsights(); renderBackupStatus(); renderReminderSettings(); renderPartnerSettings();
+  renderToday(); renderCalendar(); renderInsights(); renderBackupStatus(); renderReminderSettings(); renderPartnerSettings(); renderResponseSettings();
   queueMicrotask(refreshIcons);
 }
 
@@ -389,6 +422,7 @@ function renderToday() {
     const empty = document.createElement("p"); empty.className = "empty-inline"; empty.textContent = "今天还没有记录";
     elements.todayRecord.append(empty);
   } else chips.forEach(label => elements.todayRecord.append(createTag(label)));
+  renderTodayResponse();
   const recordCount = Object.keys(state.records).length;
   const lastBackup = state.settings.lastBackupAt ? new Date(state.settings.lastBackupAt) : null;
   elements.backupReminder.hidden = recordCount < 5 || (lastBackup && daysBetween(lastBackup, today) < 30);
@@ -415,6 +449,7 @@ function renderTodayGuidance(prediction, periodSegment, today) {
 
 function renderCycleRing(cycleDay, prediction, periodSegment) {
   if (!cycleDay || !prediction || cycleDay < 1 || cycleDay > prediction.cycleLength + 14) {
+    document.body.dataset.phase = "waiting";
     setRingArc(elements.ringProgress, 0, 0);
     setRingArc(elements.ringPeriod, 0, 0);
     setRingArc(elements.ringPrediction, 0, 0);
@@ -432,9 +467,11 @@ function renderCycleRing(cycleDay, prediction, periodSegment) {
   setRingArc(elements.ringPrediction, predictionStart, predictionLength);
   const ovulationDay = Math.max(prediction.periodLength + 2, cycleLength - 14);
   let phase = "卵泡期 · 估算";
-  if (periodSegment || cycleDay <= prediction.periodLength) phase = "经期";
-  else if (cycleDay >= ovulationDay - 2 && cycleDay <= ovulationDay + 2) phase = "排卵附近 · 估算";
-  else if (cycleDay > ovulationDay + 2) phase = "黄体期 · 估算";
+  let phaseKey = "follicular";
+  if (periodSegment || cycleDay <= prediction.periodLength) { phase = "经期"; phaseKey = "period"; }
+  else if (cycleDay >= ovulationDay - 2 && cycleDay <= ovulationDay + 2) { phase = "排卵附近 · 估算"; phaseKey = "ovulation"; }
+  else if (cycleDay > ovulationDay + 2) { phase = "黄体期 · 估算"; phaseKey = "luteal"; }
+  document.body.dataset.phase = phaseKey;
   elements.ringPhase.textContent = phase;
   elements.ringDay.textContent = String(cycleDay);
   elements.ringCaption.textContent = `约 ${cycleLength} 天周期`;
@@ -473,7 +510,18 @@ function recordLabels(record) {
   return labels;
 }
 
-function createTag(label) { const span = document.createElement("span"); span.className = "record-tag"; span.textContent = label; return span; }
+function createTag(label, tone = tagTone(label)) {
+  const span = document.createElement("span"); span.className = "record-tag"; span.dataset.tone = tone; span.textContent = label; return span;
+}
+
+function tagTone(label) {
+  if (/经期|经量|出血/.test(label)) return "period";
+  if (/同房|保护/.test(label)) return "intimacy";
+  if (/情绪|低落|平静|敏感|烦躁/.test(label)) return "mood";
+  if (/精力|疲倦|耗尽|充沛/.test(label)) return "energy";
+  if (/痛|腹胀|痘痘|睡眠|食欲|分泌物/.test(label)) return "body";
+  return "neutral";
+}
 
 function renderCalendar() {
   elements.monthTitle.textContent = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" }).format(state.month);
@@ -575,7 +623,9 @@ function openRecordForRole(date) {
 }
 
 function openRecordDetail(date) {
-  const record = state.records[dateKey(date)];
+  const key = dateKey(date);
+  const record = state.records[key];
+  state.detailDate = key;
   elements.recordDetailTitle.textContent = new Intl.DateTimeFormat("zh-CN", {
     year: "numeric", month: "long", day: "numeric", weekday: "short"
   }).format(date);
@@ -586,10 +636,13 @@ function openRecordDetail(date) {
   } else {
     const groups = recordDetailGroups(record);
     groups.filter(group => group.values.length).forEach(group => {
-      const section = document.createElement("section"); section.className = "record-detail-section";
-      const heading = document.createElement("h3"); heading.textContent = group.title;
+      const section = document.createElement("section"); section.className = "record-detail-section"; section.dataset.tone = group.tone;
+      const heading = document.createElement("h3");
+      const icon = document.createElement("i"); icon.dataset.lucide = group.icon;
+      const title = document.createElement("span"); title.textContent = group.title;
+      heading.append(icon, title);
       const values = document.createElement("div"); values.className = "record-detail-values";
-      group.values.forEach(value => values.append(createTag(value))); section.append(heading, values);
+      group.values.forEach(value => values.append(createTag(value, group.tone))); section.append(heading, values);
       elements.recordDetailBody.append(section);
     });
     if (record.note) {
@@ -599,6 +652,7 @@ function openRecordDetail(date) {
       elements.recordDetailBody.append(section);
     }
   }
+  renderPartnerResponsePanel(key, record);
   elements.recordDetailDialog.showModal(); queueMicrotask(refreshIcons);
 }
 
@@ -620,9 +674,76 @@ function recordDetailGroups(record) {
     intimacy.push(`保护措施：${{ all: "全部有", partial: "部分有", none: "均无", unknown: "未记录" }[record.protection] || "未记录"}`);
   }
   return [
-    { title: "经期", values: cycle }, { title: "身体与情绪", values: body },
-    { title: "亲密记录", values: intimacy }, { title: "自定义标签", values: record.customTags || [] }
+    { title: "经期", icon: "droplets", tone: "period", values: cycle },
+    { title: "身体与情绪", icon: "heart-pulse", tone: "body", values: body },
+    { title: "亲密记录", icon: "heart", tone: "intimacy", values: intimacy },
+    { title: "自定义标签", icon: "tags", tone: "neutral", values: record.customTags || [] }
   ];
+}
+
+function partnerResponseOption(type) {
+  return PARTNER_RESPONSES.find(option => option.id === type);
+}
+
+function renderTodayResponse() {
+  renderResponseBanner(elements.todayPartnerResponse, dateKey(new Date()));
+}
+
+function renderResponseBanner(container, key) {
+  if (!container) return;
+  const response = state.partnerResponses[key];
+  const option = partnerResponseOption(response?.type);
+  container.replaceChildren();
+  container.hidden = !option;
+  if (!option) return;
+  const icon = document.createElement("span"); icon.className = "partner-response-badge";
+  const glyph = document.createElement("i"); glyph.dataset.lucide = option.icon; icon.append(glyph);
+  const copy = document.createElement("span");
+  const title = document.createElement("strong");
+  title.textContent = state.cloudRole === "partner" ? `你回应了：${option.label}` : `伴侣回应：${option.label}`;
+  const time = document.createElement("small");
+  time.textContent = response.updatedAt ? `更新于 ${formatResponseTime(response.updatedAt)}` : "已同步到伴侣空间";
+  copy.append(title, time); container.append(icon, copy); queueMicrotask(refreshIcons);
+}
+
+function formatResponseTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "刚刚";
+  return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+function renderPartnerResponsePanel(key, record) {
+  const visible = state.cloudRole === "partner" && record && recordHasData(record) && state.responsesPaired;
+  elements.partnerResponsePanel.hidden = !visible;
+  elements.partnerResponseOptions.replaceChildren();
+  if (!visible) return;
+  const enabled = state.responsesAvailable && state.responsesEnabled;
+  elements.partnerResponseHint.textContent = !state.responsesAvailable
+    ? "云端功能尚未升级"
+    : state.responsesEnabled ? "轻点发送，再点一次即可撤回" : "记录者暂未开启伴侣回应";
+  PARTNER_RESPONSES.forEach(option => {
+    const button = document.createElement("button"); button.type = "button"; button.className = "partner-response-option";
+    button.disabled = !enabled; button.classList.toggle("selected", state.partnerResponses[key]?.type === option.id);
+    const icon = document.createElement("i"); icon.dataset.lucide = option.icon;
+    const label = document.createElement("span"); label.textContent = option.label;
+    button.append(icon, label);
+    button.addEventListener("click", () => sendPartnerResponse(key, option.id, button));
+    elements.partnerResponseOptions.append(button);
+  });
+  queueMicrotask(refreshIcons);
+}
+
+async function sendPartnerResponse(key, type, sourceButton) {
+  const selected = state.partnerResponses[key]?.type === type;
+  elements.partnerResponseOptions.querySelectorAll("button").forEach(button => { button.disabled = true; });
+  sourceButton.classList.add("pending");
+  const success = await window.CloudSync?.setPartnerResponse(key, selected ? null : type);
+  if (!success) {
+    showToast("回应未发送，请检查网络后重试");
+    renderPartnerResponsePanel(key, state.records[key]);
+    return;
+  }
+  showToast(selected ? "回应已撤回" : "回应已发送");
 }
 
 function renderSymptomOptions() {
@@ -671,6 +792,7 @@ function populateRecordForm(date) {
   document.querySelectorAll('input[name="symptoms"]').forEach(input => { input.checked = record.symptoms.includes(input.value); });
   elements.customTags.value = record.customTags.join("、"); elements.note.value = record.note || "";
   elements.deleteRecord.hidden = !state.records[dateKey(state.selectedDate)];
+  renderResponseBanner(elements.recordFormResponse, key);
   elements.editPeriodRange.hidden = !(record.period && record.period !== "none");
   renderRecordWeekStrip(); updateFormVisibility();
   if (draft) showToast("已恢复这一天的未保存内容");
@@ -1064,6 +1186,33 @@ function renderPartnerSettings() {
   elements.shareCycle.checked = state.settings.partnerShareCycle !== false;
   elements.shareBody.checked = state.settings.partnerShareBody !== false;
   elements.shareMood.checked = state.settings.partnerShareMood !== false;
+}
+
+function renderResponseSettings() {
+  if (!elements.responseSettings) return;
+  elements.responseSettings.hidden = !state.responsesPaired;
+  if (!state.responsesPaired) return;
+  elements.responsesEnabled.checked = state.responsesEnabled;
+  elements.responsesEnabled.disabled = state.cloudRole !== "owner" || !state.responsesAvailable;
+  if (!state.responsesAvailable) elements.responseSettingsHint.textContent = "云端数据库升级后可用";
+  else if (state.cloudRole === "partner") {
+    elements.responseSettingsHint.textContent = state.responsesEnabled ? "记录者允许你回应每日记录" : "记录者暂未开启回应";
+  } else {
+    elements.responseSettingsHint.textContent = state.responsesEnabled ? "伴侣可以对每日记录发送一句回应" : "伴侣回应已关闭，历史回应仍保留";
+  }
+}
+
+async function changeResponsesEnabled() {
+  if (state.cloudRole !== "owner" || !state.responsesAvailable) { renderResponseSettings(); return; }
+  const next = elements.responsesEnabled.checked;
+  elements.responsesEnabled.disabled = true;
+  const success = await window.CloudSync?.setResponsesEnabled(next);
+  if (!success) {
+    renderResponseSettings();
+    showToast("设置未保存，请检查网络后重试");
+    return;
+  }
+  showToast(next ? "伴侣回应已开启" : "伴侣回应已关闭");
 }
 
 function savePartnerSettings() {

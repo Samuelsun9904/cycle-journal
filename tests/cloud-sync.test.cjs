@@ -21,7 +21,8 @@ const localStorage = {
 };
 
 let authListener;
-let activeCouple = { id: "couple-a", owner_id: "user-a", partner_id: "user-p", invite_code: "ABCDEFGH" };
+let activeCouple = { id: "couple-a", owner_id: "user-a", partner_id: "user-p", invite_code: "ABCDEFGH", responses_enabled: true };
+const remoteResponses = new Map();
 const remote = new Map(Array.from({ length: 1201 }, (_, index) => {
   const date = new Date(Date.UTC(2020, 0, index + 1)).toISOString().slice(0, 10);
   return [date, { record_date: date, payload: { note: `remote-${index}` }, deleted_at: null, updated_at: new Date().toISOString() }];
@@ -42,11 +43,31 @@ const loggedErrors = [];
 
 function couplesQuery() {
   return {
+    update(values) { activeCouple = { ...activeCouple, ...values }; return this; },
     select() { return this; },
-    or() { return this; },
+    or() { return this; }, eq() { return this; },
     maybeSingle: async () => ({ data: activeCouple, error: null }),
     insert() { return this; },
     single: async () => ({ data: activeCouple, error: null })
+  };
+}
+
+function responsesQuery() {
+  return {
+    select() { return this; },
+    eq(column, value) { if (column === "response_date") this.responseDate = value; return this; },
+    order() { return this; },
+    range: async (from, to) => ({ data: [...remoteResponses.values()].slice(from, to + 1), error: null }),
+    delete() { this.deleting = true; return this; },
+    upsert(row) {
+      this.upserted = { response_date: row.response_date, response_type: row.response_type, updated_at: new Date().toISOString() };
+      remoteResponses.set(row.response_date, this.upserted); return this;
+    },
+    single: async function () { return { data: this.upserted || activeCouple, error: null }; },
+    then(resolve) {
+      if (this.deleting && this.responseDate) remoteResponses.delete(this.responseDate);
+      return Promise.resolve({ error: null }).then(resolve);
+    }
   };
 }
 
@@ -95,7 +116,7 @@ const client = {
     signUp: async () => ({ data: { session: {} }, error: null }),
     signOut: async () => { authListener("SIGNED_OUT", null); }
   },
-  from(table) { return table === "couples" ? couplesQuery() : recordsQuery(); },
+  from(table) { return table === "couples" ? couplesQuery() : table === "partner_responses" ? responsesQuery() : recordsQuery(); },
   rpc: async () => ({ data: activeCouple, error: null }),
   channel() {
     return { on() { return this; }, subscribe(callback) { callback("SUBSCRIBED"); return this; } };
@@ -124,10 +145,14 @@ vm.runInContext(fs.readFileSync(path.join(__dirname, "../cloud.js"), "utf8"), co
 
 let records = { "2026-09-06": { note: "local record missed by the old sync queue" } };
 const scopes = [];
+let responseContext;
+let responseSnapshot = {};
 const app = {
   getSnapshot: () => ({ records }),
   replaceRecords: async next => { records = structuredClone(next); },
   switchStorageScope: async (scope, options) => { scopes.push({ scope, options }); return { adopted: Boolean(options?.adoptCurrent) }; },
+  replacePartnerResponses: next => { responseSnapshot = structuredClone(next); },
+  setPartnerResponseContext: next => { responseContext = { ...next }; },
   onRoleChange() {},
   notify() {}
 };
@@ -141,6 +166,10 @@ const app = {
   assert.equal(remote.get("2019-12-31").payload, null, "legacy tombstones should be scrubbed without restoring them");
   assert.equal(scopes[0].scope, "user:user-a");
   assert.equal(scopes[1].scope, "couple:couple-a");
+  assert.deepEqual(responseContext, { paired: true, available: true, enabled: true });
+  assert.equal(await context.CloudSync.setResponsesEnabled(false), true);
+  assert.equal(responseContext.enabled, false);
+  assert.equal(await context.CloudSync.setResponsesEnabled(true), true);
 
   records["2026-09-07"] = { note: "first save" };
   context.CloudSync.schedulePush(["2026-09-07"]);
@@ -169,6 +198,15 @@ const app = {
   assert.ok(failedMeta.pendingDates.includes("2026-09-09"), "failed dates must remain pending");
   assert.equal(await context.CloudSync.syncNow(), true, "manual retry should flush pending changes");
   assert.equal(remote.get("2026-09-09").payload.note, "retry me");
+
+  await authListener("SIGNED_OUT", null);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  authListener("SIGNED_IN", { user: { id: "user-p", email: "p@example.com" } });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(await context.CloudSync.setPartnerResponse("2026-09-06", "hug"), true);
+  assert.equal(responseSnapshot["2026-09-06"].type, "hug");
+  assert.equal(await context.CloudSync.setPartnerResponse("2026-09-06", null), true);
+  assert.equal(responseSnapshot["2026-09-06"], undefined);
 
   await authListener("SIGNED_OUT", null);
   await new Promise(resolve => setTimeout(resolve, 0));

@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=11">
+  <link rel="stylesheet" href="styles.css?v=12">
 </head>
 <body>
   <div class="app-shell">
@@ -62,6 +62,7 @@
         <div class="today-details">
           <div class="section-row"><h2>今日记录</h2><button class="inline-button" id="editTodayButton" type="button">编辑</button></div>
           <div class="today-record" id="todayRecord"></div>
+          <div class="partner-response-banner" id="todayPartnerResponse" hidden></div>
         </div>
         <button class="backup-reminder" id="backupReminder" type="button" hidden>
           <span><strong>该备份数据了</strong><small>生成一份加密文件，防止换机或误删</small></span>
@@ -189,6 +190,13 @@
           </div>
           <p class="field-error" id="syncError" role="alert"></p>
         </div>
+        <div class="response-settings" id="responseSettings" hidden>
+          <div class="response-settings-copy">
+            <span class="setting-icon response-icon"><i data-lucide="message-circle-heart"></i></span>
+            <span><strong>伴侣回应</strong><small id="responseSettingsHint">允许伴侣对每日记录发送一句回应</small></span>
+          </div>
+          <input id="responsesEnabledInput" type="checkbox" role="switch" aria-label="允许伴侣回应" checked>
+        </div>
         <div class="partner-panel">
           <div class="partner-heading"><span class="partner-icon"><i data-lucide="heart-handshake"></i></span><div><strong>伴侣摘要</strong><small>生成图片后由你亲自发送</small></div></div>
           <label class="partner-name-field">伴侣昵称<input id="partnerNameInput" maxlength="20" placeholder="例如：小明"></label>
@@ -241,6 +249,7 @@
       </div>
 
       <div class="record-week-strip" id="recordWeekStrip" aria-label="选择记录日期"></div>
+      <div class="record-response-banner" id="recordFormResponse" hidden></div>
 
       <fieldset>
         <legend>经期</legend>
@@ -350,6 +359,10 @@
         <button class="icon-button" id="closeRecordDetail" aria-label="关闭" title="关闭" type="button"><i data-lucide="x"></i></button>
       </div>
       <div class="record-detail-body" id="recordDetailBody"></div>
+      <section class="partner-response-panel" id="partnerResponsePanel" hidden>
+        <div class="partner-response-heading"><span><strong>给她一个回应</strong><small id="partnerResponseHint">轻点发送，再点一次即可撤回</small></span><i data-lucide="message-circle-heart"></i></div>
+        <div class="partner-response-options" id="partnerResponseOptions"></div>
+      </section>
     </div>
   </dialog>
 
@@ -438,7 +451,7 @@
   <script src="vendor/lucide.min.js?v=11"></script>
   <script src="vendor/supabase.min.js?v=11"></script>
   <script src="config.js?v=11"></script>
-  <script src="cloud.js?v=11"></script>
-  <script src="app.js?v=11"></script>
+  <script src="cloud.js?v=12"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>

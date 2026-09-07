@@ -26,6 +26,8 @@
   let legacyAuthoritative = false;
   let legacyMerge = false;
   let protectEmptyRemote = false;
+  let responsesAvailable = false;
+  let partnerResponses = {};
   const dirtyVersions = new Map();
   const ui = {};
 
@@ -155,7 +157,19 @@
     legacyAuthoritative = false;
     legacyMerge = false;
     protectEmptyRemote = false;
+    responsesAvailable = false;
+    partnerResponses = {};
     dirtyVersions.clear();
+    app?.replacePartnerResponses?.({});
+    app?.setPartnerResponseContext?.({ paired: false, available: false, enabled: false });
+  }
+
+  function notifyResponseContext() {
+    app?.setPartnerResponseContext?.({
+      paired: Boolean(couple),
+      available: responsesAvailable,
+      enabled: Boolean(couple?.responses_enabled)
+    });
   }
 
   async function applySession(nextSession) {
@@ -174,6 +188,7 @@
       setStatus("未登录，仅保存在当前设备", "idle");
       app.onRoleChange(role);
       renderCouple();
+      notifyResponseContext();
       return;
     }
 
@@ -197,6 +212,7 @@
     couple = data;
     if (!couple) {
       renderCouple();
+      notifyResponseContext();
       setStatus("已登录，等待创建或加入空间", "ready");
       if (canAdoptLegacy) localStorage.removeItem(LEGACY_META_KEY);
       return;
@@ -213,6 +229,7 @@
       migratedLegacy: Boolean(canAdoptLegacy && userScopeResult?.adopted)
     });
     if (canAdoptLegacy && synced) localStorage.removeItem(LEGACY_META_KEY);
+    await pullPartnerResponses();
     await subscribe();
   }
 
@@ -245,6 +262,7 @@
     app.onRoleChange(role);
     renderCouple();
     await syncNow(true);
+    await pullPartnerResponses();
     await subscribe();
   }
 
@@ -262,6 +280,7 @@
     renderCouple();
     const synced = await syncNow();
     if (synced) app.notify("已加入伴侣空间");
+    await pullPartnerResponses();
     await subscribe();
   }
 
@@ -467,6 +486,96 @@
     }
   }
 
+  function isMissingResponseSchema(error) {
+    const message = String(error?.message || error || "");
+    return ["42P01", "42703", "PGRST204", "PGRST205"].includes(error?.code) ||
+      /partner_responses|responses_enabled/i.test(message) && /does not exist|not found|schema cache|column/i.test(message);
+  }
+
+  async function fetchAllPartnerResponses() {
+    const rows = [];
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await client.from("partner_responses")
+        .select("response_date,response_type,updated_at")
+        .eq("couple_id", couple.id)
+        .order("response_date", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) throw error;
+      rows.push(...(data || []));
+      if (!data || data.length < PAGE_SIZE) return rows;
+    }
+  }
+
+  async function pullPartnerResponses() {
+    if (!couple) { notifyResponseContext(); return false; }
+    const coupleId = couple.id;
+    try {
+      const rows = await fetchAllPartnerResponses();
+      if (couple?.id !== coupleId) return false;
+      responsesAvailable = true;
+      partnerResponses = Object.fromEntries(rows.map(row => [row.response_date, {
+        type: row.response_type,
+        updatedAt: row.updated_at
+      }]));
+      app.replacePartnerResponses?.(partnerResponses);
+      notifyResponseContext();
+      return true;
+    } catch (error) {
+      if (!isMissingResponseSchema(error)) console.error("Partner responses could not be loaded", error);
+      responsesAvailable = false;
+      partnerResponses = {};
+      app.replacePartnerResponses?.({});
+      notifyResponseContext();
+      return false;
+    }
+  }
+
+  async function setResponsesEnabled(enabled) {
+    if (role !== "owner" || !couple || !responsesAvailable) return false;
+    const { data, error } = await client.from("couples").update({ responses_enabled: Boolean(enabled) })
+      .eq("id", couple.id).select().single();
+    if (error) {
+      if (isMissingResponseSchema(error)) responsesAvailable = false;
+      else setError(error);
+      notifyResponseContext();
+      return false;
+    }
+    couple = data || { ...couple, responses_enabled: Boolean(enabled) };
+    notifyResponseContext();
+    return true;
+  }
+
+  async function setPartnerResponse(recordDate, responseType) {
+    const allowed = new Set(["seen", "hug", "care", "prepare"]);
+    if (role !== "partner" || !couple || !responsesAvailable || !couple.responses_enabled) return false;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDate) || (responseType !== null && !allowed.has(responseType))) return false;
+    let result;
+    if (responseType === null) {
+      result = await client.from("partner_responses").delete()
+        .eq("couple_id", couple.id).eq("response_date", recordDate);
+    } else {
+      result = await client.from("partner_responses").upsert({
+        couple_id: couple.id,
+        response_date: recordDate,
+        responder_id: session.user.id,
+        response_type: responseType
+      }, { onConflict: "couple_id,response_date" }).select("response_date,response_type,updated_at").single();
+    }
+    if (result.error) {
+      if (isMissingResponseSchema(result.error)) responsesAvailable = false;
+      else setError(result.error);
+      notifyResponseContext();
+      return false;
+    }
+    if (responseType === null) delete partnerResponses[recordDate];
+    else partnerResponses[recordDate] = {
+      type: result.data?.response_type || responseType,
+      updatedAt: result.data?.updated_at || new Date().toISOString()
+    };
+    app.replacePartnerResponses?.({ ...partnerResponses });
+    return true;
+  }
+
   async function subscribe() {
     await removeChannel();
     if (!couple) return;
@@ -476,7 +585,17 @@
         if (activeContext !== contextVersion) return;
         pullRequested = true;
         window.setTimeout(drainSync, 120);
-      }).subscribe(status => {
+      });
+    if (responsesAvailable) {
+      channel.on("postgres_changes", { event: "*", schema: "public", table: "partner_responses", filter: `couple_id=eq.${couple.id}` }, () => {
+        if (activeContext === contextVersion) window.setTimeout(pullPartnerResponses, 120);
+      }).on("postgres_changes", { event: "UPDATE", schema: "public", table: "couples", filter: `id=eq.${couple.id}` }, payload => {
+        if (activeContext !== contextVersion) return;
+        couple = { ...couple, ...(payload.new || {}) };
+        notifyResponseContext();
+      });
+    }
+    channel.subscribe(status => {
         if (activeContext !== contextVersion) return;
         if (status === "SUBSCRIBED") {
           pullRequested = true;
@@ -523,5 +642,5 @@
   }
   function formatDate(value) { return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(new Date(value)); }
 
-  window.CloudSync = { initialize, schedulePush, syncNow, configured };
+  window.CloudSync = { initialize, schedulePush, syncNow, setResponsesEnabled, setPartnerResponse, configured };
 })();
