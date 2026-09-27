@@ -3,7 +3,7 @@ const DRAFT_KEY = "cycle-journal-drafts-v1";
 const PRE_V9_BACKUP_KEY = "cycle-journal-pre-v9-backup";
 const SNAPSHOT_DB = "cycle-journal-storage";
 const STORAGE_VERSION = 4;
-const RELEASE_NOTES_KEY = "cycle-journal-release-v13";
+const RELEASE_NOTES_KEY = "cycle-journal-release-v14";
 const BACKUP_ITERATIONS = 250000;
 const SYMPTOMS = [
   { id: "bloating", label: "腹胀" }, { id: "acne", label: "痘痘" },
@@ -224,7 +224,11 @@ function persist(options = {}) {
   const snapshot = { version: STORAGE_VERSION, records: state.records, settings: state.settings };
   const nextSignatures = recordSignatures(state.records);
   const changedDates = changedRecordDates(persistedRecordSignatures, nextSignatures);
-  localStorage.setItem(storageKey(STORAGE_KEY), JSON.stringify(snapshot));
+  try { localStorage.setItem(storageKey(STORAGE_KEY), JSON.stringify(snapshot)); }
+  catch (error) {
+    console.warn("Local storage save failed", error);
+    queueMicrotask(() => showToast("设备存储空间不足，记录将继续尝试云同步"));
+  }
   persistedRecordSignatures = nextSignatures;
   const snapshotPromise = saveIndexedSnapshot(snapshot);
   if (options.cloud !== false && changedDates.length) window.CloudSync?.schedulePush(changedDates);

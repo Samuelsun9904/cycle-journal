@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="styles.css?v=13">
+  <link rel="stylesheet" href="styles.css?v=14">
 </head>
 <body>
   <div class="app-shell">
@@ -179,6 +179,7 @@
           </div>
           <div id="signedInSync" hidden>
             <div class="account-row"><span><strong id="syncAccountEmail"></strong><small id="syncRoleLabel">尚未加入伴侣空间</small></span><button class="text-button" id="signOutButton" type="button">退出</button></div>
+            <button class="secondary-button sync-action retry-connection" id="retryConnectionButton" type="button" hidden><i data-lucide="wifi"></i>重新连接</button>
             <div id="noCoupleActions">
               <button class="primary-button sync-action" id="createCoupleButton" type="button"><i data-lucide="heart-handshake"></i>我是记录者，创建空间</button>
               <div class="join-row"><input id="inviteCodeInput" maxlength="8" autocomplete="one-time-code" placeholder="输入邀请码"><button class="secondary-button" id="joinCoupleButton" type="button">加入</button></div>
@@ -455,12 +456,12 @@
   <dialog class="release-dialog" id="releaseDialog">
     <div class="release-dialog-content">
       <div class="release-mark"><i data-lucide="sparkles"></i></div>
-      <p class="eyebrow">版本 13</p>
+      <p class="eyebrow">版本 14</p>
       <h2>这次更新了什么</h2>
       <div class="release-list">
-        <div><i data-lucide="message-circle-heart"></i><span><strong>回应更可靠</strong><small>首页显示最近回应，切回应用和手动同步都会刷新。</small></span></div>
-        <div><i data-lucide="pen-line"></i><span><strong>可以自己说一句</strong><small>伴侣可发送不超过 30 字的简短自定义回应。</small></span></div>
-        <div><i data-lucide="palette"></i><span><strong>界面重新整理</strong><small>强化阶段色、日历层次、记录标签和操作反馈。</small></span></div>
+        <div><i data-lucide="cloud-off"></i><span><strong>断网也不丢空间</strong><small>网络波动时保留上次伴侣空间和设备记录。</small></span></div>
+        <div><i data-lucide="refresh-cw"></i><span><strong>自动恢复连接</strong><small>回到应用或网络恢复后重新验证空间和实时同步。</small></span></div>
+        <div><i data-lucide="shield-check"></i><span><strong>状态更可信</strong><small>区分密码错误、网络超时、离线缓存和部分同步。</small></span></div>
       </div>
       <button class="primary-button release-confirm" id="closeReleaseDialog" type="button">知道了</button>
     </div>
@@ -470,7 +471,7 @@
   <script src="vendor/lucide.min.js?v=11"></script>
   <script src="vendor/supabase.min.js?v=11"></script>
   <script src="config.js?v=11"></script>
-  <script src="cloud.js?v=13"></script>
-  <script src="app.js?v=13"></script>
+  <script src="cloud.js?v=14"></script>
+  <script src="app.js?v=14"></script>
 </body>
 </html>

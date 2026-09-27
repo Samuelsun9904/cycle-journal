@@ -22,6 +22,9 @@ const localStorage = {
 
 let authListener;
 let activeCouple = { id: "couple-a", owner_id: "user-a", partner_id: "user-p", invite_code: "ABCDEFGH", responses_enabled: true };
+let failCoupleLookup = false;
+let latestChannelStatus;
+let channelCreations = 0;
 const remoteResponses = new Map();
 const remote = new Map(Array.from({ length: 1201 }, (_, index) => {
   const date = new Date(Date.UTC(2020, 0, index + 1)).toISOString().slice(0, 10);
@@ -46,7 +49,7 @@ function couplesQuery() {
     update(values) { activeCouple = { ...activeCouple, ...values }; return this; },
     select() { return this; },
     or() { return this; }, eq() { return this; },
-    maybeSingle: async () => ({ data: activeCouple, error: null }),
+    maybeSingle: async () => failCoupleLookup ? ({ data: null, error: new Error("network fetch failed") }) : ({ data: activeCouple, error: null }),
     insert() { return this; },
     single: async () => ({ data: activeCouple, error: null })
   };
@@ -119,7 +122,8 @@ const client = {
   from(table) { return table === "couples" ? couplesQuery() : table === "partner_responses" ? responsesQuery() : recordsQuery(); },
   rpc: async () => ({ data: activeCouple, error: null }),
   channel() {
-    return { on() { return this; }, subscribe(callback) { callback("SUBSCRIBED"); return this; } };
+    channelCreations += 1;
+    return { on() { return this; }, subscribe(callback) { latestChannelStatus = callback; callback("SUBSCRIBED"); return this; } };
   },
   removeChannel: async () => {}
 };
@@ -199,6 +203,11 @@ const app = {
   assert.equal(await context.CloudSync.syncNow(), true, "manual retry should flush pending changes");
   assert.equal(remote.get("2026-09-09").payload.note, "retry me");
 
+  const channelsBeforeFailure = channelCreations;
+  latestChannelStatus("CHANNEL_ERROR");
+  await new Promise(resolve => setTimeout(resolve, 2100));
+  assert.ok(channelCreations > channelsBeforeFailure, "a failed realtime channel must be recreated");
+
   await authListener("SIGNED_OUT", null);
   await new Promise(resolve => setTimeout(resolve, 0));
   authListener("SIGNED_IN", { user: { id: "user-p", email: "p@example.com" } });
@@ -210,6 +219,21 @@ const app = {
   assert.equal(await context.CloudSync.setPartnerResponse("2026-09-06", "custom", ""), false, "empty custom responses must be rejected");
   assert.equal(await context.CloudSync.setPartnerResponse("2026-09-06", null), true);
   assert.equal(responseSnapshot["2026-09-06"], undefined);
+
+  await authListener("SIGNED_OUT", null);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  activeCouple = { id: "couple-a", owner_id: "user-a", partner_id: "user-p", invite_code: "ABCDEFGH", responses_enabled: true };
+  failCoupleLookup = true;
+  authListener("SIGNED_IN", { user: { id: "user-a", email: "a@example.com" } });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(scopes.at(-1).scope, "couple:couple-a", "a network failure must not switch cached couple data to the empty user scope");
+  assert.equal(element("#coupleDetails").hidden, false, "cached couple details must remain visible during a network failure");
+  assert.match(element("#syncStatus").textContent, /上次同步内容/);
+  assert.match(element("#syncRoleLabel").textContent, /离线/);
+  failCoupleLookup = false;
+  authListener("TOKEN_REFRESHED", { user: { id: "user-a", email: "a@example.com" } });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(element("#retryConnectionButton").hidden, true, "successful recovery should clear the reconnect state");
 
   await authListener("SIGNED_OUT", null);
   await new Promise(resolve => setTimeout(resolve, 0));

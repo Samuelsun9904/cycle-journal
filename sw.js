@@ -1,10 +1,10 @@
-const CACHE_NAME = "cycle-journal-v13";
+const CACHE_NAME = "cycle-journal-v14";
 const ASSETS = [
   "./",
   "index.html",
-  "styles.css?v=13",
-  "app.js?v=13",
-  "cloud.js?v=13",
+  "styles.css?v=14",
+  "app.js?v=14",
+  "cloud.js?v=14",
   "config.js?v=11",
   "vendor/lucide.min.js?v=11",
   "vendor/supabase.min.js?v=11",
@@ -31,14 +31,16 @@ self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
   if (event.request.mode === "navigate") {
     event.respondWith((async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
       try {
-        const response = await fetch(event.request);
+        const response = await fetch(event.request, { signal: controller.signal });
         const cache = await caches.open(CACHE_NAME);
         cache.put(event.request, response.clone());
         return response;
       } catch {
         return (await caches.match(event.request)) || caches.match("./");
-      }
+      } finally { clearTimeout(timeout); }
     })());
     return;
   }

@@ -2,6 +2,7 @@
   const LEGACY_META_KEY = "cycle-journal-cloud-meta-v1";
   const META_PREFIX = "cycle-journal-cloud-meta-v2";
   const MIGRATION_OWNER_KEY = "cycle-journal-cloud-migration-owner-v2";
+  const LAST_COUPLE_PREFIX = "cycle-journal-last-couple-v1";
   const PAGE_SIZE = 500;
   const RETRY_DELAYS = [2000, 5000, 15000, 30000];
   const config = window.CYCLE_JOURNAL_CONFIG || {};
@@ -17,8 +18,13 @@
   let channel;
   let syncTimer;
   let retryTimer;
+  let sessionRetryTimer;
+  let reconnectTimer;
   let retryAttempt = 0;
+  let sessionRetryAttempt = 0;
+  let reconnectAttempt = 0;
   let contextVersion = 0;
+  let subscriptionVersion = 0;
   let mutationVersion = 0;
   let syncPromise;
   let pushRequested = false;
@@ -28,10 +34,49 @@
   let protectEmptyRemote = false;
   let responsesAvailable = false;
   let partnerResponses = {};
+  let coupleVerified = false;
+  let contextLoading = false;
+  let channelConnected = false;
+  let authRecoveryNeeded = false;
   const dirtyVersions = new Map();
   const ui = {};
 
   function currentMetaKey() { return couple ? `${META_PREFIX}:${couple.id}` : null; }
+
+  function cachedCoupleKey(userId) { return `${LAST_COUPLE_PREFIX}:${userId}`; }
+
+  function readCachedCouple(userId) {
+    try {
+      const value = JSON.parse(localStorage.getItem(cachedCoupleKey(userId)));
+      if (!value?.couple?.id || !["owner", "partner"].includes(value.role)) return null;
+      return value;
+    } catch { return null; }
+  }
+
+  function writeCachedCouple() {
+    if (!session?.user?.id || !couple || !["owner", "partner"].includes(role)) return;
+    try { localStorage.setItem(cachedCoupleKey(session.user.id), JSON.stringify({ couple, role })); }
+    catch (error) { console.warn("Cloud context could not be cached", error); }
+  }
+
+  function clearCachedCouple(userId) {
+    try { localStorage.removeItem(cachedCoupleKey(userId)); }
+    catch (error) { console.warn("Cloud context cache could not be cleared", error); }
+  }
+
+  async function withTimeout(value, milliseconds, label) {
+    let timeout;
+    try {
+      return await Promise.race([
+        Promise.resolve(value),
+        new Promise((_, reject) => {
+          timeout = window.setTimeout(() => {
+            const error = new Error(`${label} timed out`); error.code = "NETWORK_TIMEOUT"; reject(error);
+          }, milliseconds);
+        })
+      ]);
+    } finally { clearTimeout(timeout); }
+  }
 
   function readMeta() {
     const key = currentMetaKey();
@@ -45,13 +90,15 @@
   function writeMeta(value) {
     const key = currentMetaKey();
     if (!key) return;
-    localStorage.setItem(key, JSON.stringify({ ...readMeta(), ...value }));
+    try { localStorage.setItem(key, JSON.stringify({ ...readMeta(), ...value })); }
+    catch (error) { console.warn("Sync queue metadata could not be stored", error); }
   }
 
   function claimLegacyData(userId) {
     const claimedBy = localStorage.getItem(MIGRATION_OWNER_KEY);
     if (claimedBy) return claimedBy === userId;
-    localStorage.setItem(MIGRATION_OWNER_KEY, userId);
+    try { localStorage.setItem(MIGRATION_OWNER_KEY, userId); }
+    catch (error) { console.warn("Migration ownership could not be stored", error); return false; }
     return true;
   }
 
@@ -63,8 +110,12 @@
   async function initialize(callbacks) {
     app = callbacks;
     bindUi();
-    window.addEventListener("online", retryPendingSync);
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) retryPendingSync(); });
+    window.addEventListener("online", recoverConnectivity);
+    window.addEventListener("offline", () => {
+      setStatus(couple ? "当前离线，显示上次同步内容" : "当前离线", "error");
+      if (session) ui.retry.hidden = false;
+    });
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) recoverConnectivity(); });
     if (!configured) {
       setStatus("云同步尚未配置", "idle");
       ui.signedOut.hidden = false;
@@ -75,9 +126,14 @@
       ui.error.textContent = "需要先填写 Supabase 项目地址和公开密钥。";
       return;
     }
-    const { data, error } = await client.auth.getSession();
-    if (error) setError(error);
-    await applySession(data?.session || null);
+    try {
+      const { data, error } = await withTimeout(client.auth.getSession(), 10000, "session");
+      if (error) setError(error);
+      await applySession(data?.session || null);
+    } catch (error) {
+      authRecoveryNeeded = true;
+      setError(error); setStatus("无法恢复登录，请检查网络", "error"); ui.signedOut.hidden = false;
+    }
     client.auth.onAuthStateChange((_event, nextSession) => {
       window.setTimeout(() => applySession(nextSession), 0);
     });
@@ -99,17 +155,21 @@
     ui.inviteExpiry = document.querySelector("#inviteExpiry");
     ui.joinCode = document.querySelector("#inviteCodeInput");
     ui.copy = document.querySelector("#copyInviteButton");
+    ui.create = document.querySelector("#createCoupleButton");
+    ui.join = document.querySelector("#joinCoupleButton");
     ui.copyText = document.querySelector("#coupleSyncCopy");
     ui.status = document.querySelector("#syncStatus");
     ui.indicator = document.querySelector("#syncIndicator");
     ui.error = document.querySelector("#syncError");
+    ui.retry = document.querySelector("#retryConnectionButton");
     ui.signIn.addEventListener("click", signInWithPassword);
     ui.register.addEventListener("click", registerWithPassword);
     ui.password.addEventListener("keydown", event => { if (event.key === "Enter") signInWithPassword(); });
     document.querySelector("#signOutButton").addEventListener("click", () => client.auth.signOut());
-    document.querySelector("#createCoupleButton").addEventListener("click", createCouple);
-    document.querySelector("#joinCoupleButton").addEventListener("click", joinCouple);
+    ui.create.addEventListener("click", createCouple);
+    ui.join.addEventListener("click", joinCouple);
     document.querySelector("#syncNowButton").addEventListener("click", () => syncNow(true));
+    ui.retry.addEventListener("click", recoverConnectivity);
     ui.copy.addEventListener("click", copyInvite);
   }
 
@@ -125,33 +185,49 @@
   async function signInWithPassword() {
     const fields = authFields(); if (!fields) return;
     ui.signIn.disabled = true; ui.register.disabled = true;
-    const { error } = await client.auth.signInWithPassword(fields);
-    ui.signIn.disabled = false; ui.register.disabled = false;
-    if (error) { ui.error.textContent = "邮箱或密码不正确；第一次使用请点“首次注册”。"; return; }
-    app.notify("登录成功");
+    setStatus("正在登录", "syncing");
+    try {
+      const { error } = await withTimeout(client.auth.signInWithPassword(fields), 15000, "sign in");
+      if (error) {
+        const message = String(error.message || "");
+        ui.error.textContent = /invalid.*credential|email.*password/i.test(message)
+          ? "邮箱或密码不正确；第一次使用请点“首次注册”。" : friendlyError(error);
+        setStatus("登录未完成", "error"); return;
+      }
+      ui.password.value = ""; app.notify("账号验证成功，正在恢复空间");
+    } catch (error) {
+      setError(error); setStatus("网络连接失败，可以重试", "error");
+    } finally { ui.signIn.disabled = false; ui.register.disabled = false; }
   }
 
   async function registerWithPassword() {
     const fields = authFields(); if (!fields) return;
     ui.signIn.disabled = true; ui.register.disabled = true;
-    const { data, error } = await client.auth.signUp(fields);
-    ui.signIn.disabled = false; ui.register.disabled = false;
-    if (error || !data.session) {
-      ui.error.textContent = /already|registered/i.test(error?.message || "")
-        ? "该邮箱已经注册，请直接登录。"
-        : "注册未完成，请稍后重试。";
-      return;
-    }
-    app.notify("注册并登录成功");
+    try {
+      const { data, error } = await withTimeout(client.auth.signUp(fields), 15000, "register");
+      if (error || !data.session) {
+        ui.error.textContent = /already|registered/i.test(error?.message || "")
+          ? "该邮箱已经注册，请直接登录。" : friendlyError(error || new Error("registration incomplete"));
+        return;
+      }
+      ui.password.value = ""; app.notify("注册成功，正在准备空间");
+    } catch (error) { setError(error); }
+    finally { ui.signIn.disabled = false; ui.register.disabled = false; }
   }
 
   function resetSyncContext() {
     contextVersion += 1;
     clearTimeout(syncTimer);
     clearTimeout(retryTimer);
+    clearTimeout(reconnectTimer);
     syncTimer = null;
     retryTimer = null;
+    reconnectTimer = null;
     retryAttempt = 0;
+    reconnectAttempt = 0;
+    subscriptionVersion += 1;
+    channelConnected = false;
+    coupleVerified = false;
     pushRequested = false;
     pullRequested = false;
     legacyAuthoritative = false;
@@ -172,74 +248,125 @@
     });
   }
 
-  async function applySession(nextSession) {
+  async function applySession(nextSession, options = {}) {
     const sameUser = session?.user?.id && session.user.id === nextSession?.user?.id;
-    if (sameUser && (couple || role === "unpaired")) return;
-    resetSyncContext();
-    session = nextSession;
-    couple = null;
-    await removeChannel();
-    ui.signedOut.hidden = Boolean(session);
-    ui.signedIn.hidden = !session;
-    clearError();
-    if (!session) {
-      role = "local";
-      await app.switchStorageScope("local");
-      setStatus("未登录，仅保存在当前设备", "idle");
+    if (sameUser && contextLoading) return;
+    if (!options.force && sameUser && coupleVerified) return;
+    if (!nextSession || (session?.user?.id && session.user.id !== nextSession.user?.id)) {
+      clearTimeout(sessionRetryTimer); sessionRetryTimer = null; sessionRetryAttempt = 0;
+    }
+    contextLoading = true;
+    let cachedContext = null;
+    try {
+      resetSyncContext();
+      authRecoveryNeeded = false;
+      session = nextSession;
+      couple = null;
+      await removeChannel();
+      ui.signedOut.hidden = Boolean(session);
+      ui.signedIn.hidden = !session;
+      ui.retry.hidden = true;
+      clearError();
+      if (!session) {
+        role = "local";
+        await app.switchStorageScope("local");
+        setStatus("未登录，仅保存在当前设备", "idle");
+        app.onRoleChange(role);
+        renderCouple();
+        notifyResponseContext();
+        return;
+      }
+
+      const activeContext = contextVersion;
+      const userId = session.user.id;
+      const canAdoptLegacy = claimLegacyData(userId);
+      const legacyMeta = canAdoptLegacy ? readLegacyMeta() : {};
+      let userScopeResult = { adopted: false };
+      cachedContext = readCachedCouple(userId);
+      const cachedRole = cachedContext?.couple?.owner_id === userId ? "owner"
+        : cachedContext?.couple?.partner_id === userId ? "partner" : null;
+      if (cachedContext && cachedRole) {
+        couple = cachedContext.couple;
+        role = cachedRole;
+        await app.switchStorageScope(`couple:${couple.id}`);
+        hydrateDirtyDates();
+        app.onRoleChange(role);
+        setStatus(navigator.onLine ? "正在确认伴侣空间" : "当前离线，显示上次同步内容", navigator.onLine ? "syncing" : "error");
+      } else {
+        cachedContext = null;
+        role = "unpaired";
+        userScopeResult = await app.switchStorageScope(`user:${userId}`, {
+          adoptCurrent: canAdoptLegacy,
+          clearSource: canAdoptLegacy,
+          forceClearSource: canAdoptLegacy
+        });
+        app.onRoleChange(role);
+        setStatus("正在读取云端空间", "syncing");
+      }
+      ui.accountEmail.textContent = session.user.email || "已登录";
+      renderCouple();
+      notifyResponseContext();
+
+      const { data, error } = await withTimeout(client.from("couples").select("*")
+        .or(`owner_id.eq.${userId},partner_id.eq.${userId}`).maybeSingle(), 12000, "couple lookup");
+      if (activeContext !== contextVersion) return;
+      if (error) throw error;
+      coupleVerified = true;
+      sessionRetryAttempt = 0;
+      clearTimeout(sessionRetryTimer); sessionRetryTimer = null;
+      ui.retry.hidden = true;
+
+      if (!data) {
+        clearCachedCouple(userId);
+        couple = null;
+        role = "unpaired";
+        await app.switchStorageScope(`user:${userId}`);
+        app.onRoleChange(role);
+        renderCouple();
+        notifyResponseContext();
+        setStatus("已登录，等待创建或加入空间", "ready");
+        if (canAdoptLegacy) localStorage.removeItem(LEGACY_META_KEY);
+        return;
+      }
+
+      const previousCoupleId = couple?.id;
+      couple = data;
+      role = couple.owner_id === userId ? "owner" : "partner";
+      if (previousCoupleId !== couple.id) {
+        const adopt = role === "owner" && !cachedContext;
+        await app.switchStorageScope(`couple:${couple.id}`, adopt ? { adoptCurrent: true, clearSource: true } : {});
+      }
+      protectEmptyRemote = role === "owner";
+      hydrateDirtyDates();
       app.onRoleChange(role);
+      writeCachedCouple();
       renderCouple();
-      notifyResponseContext();
-      return;
-    }
-
-    const activeContext = contextVersion;
-    const canAdoptLegacy = claimLegacyData(session.user.id);
-    const legacyMeta = canAdoptLegacy ? readLegacyMeta() : {};
-    role = "unpaired";
-    const userScopeResult = await app.switchStorageScope(`user:${session.user.id}`, {
-      adoptCurrent: canAdoptLegacy,
-      clearSource: canAdoptLegacy,
-      forceClearSource: canAdoptLegacy
-    });
-    app.onRoleChange(role);
-    ui.accountEmail.textContent = session.user.email || "已登录";
-    setStatus("正在读取云端数据", "syncing");
-    const { data, error } = await client.from("couples").select("*")
-      .or(`owner_id.eq.${session.user.id},partner_id.eq.${session.user.id}`).maybeSingle();
-    if (activeContext !== contextVersion) return;
-    if (error) { setError(error); setStatus("云端连接失败，稍后重试", "error"); scheduleSessionRetry(); return; }
-
-    couple = data;
-    if (!couple) {
-      renderCouple();
-      notifyResponseContext();
-      setStatus("已登录，等待创建或加入空间", "ready");
-      if (canAdoptLegacy) localStorage.removeItem(LEGACY_META_KEY);
-      return;
-    }
-
-    role = couple.owner_id === session.user.id ? "owner" : "partner";
-    await app.switchStorageScope(`couple:${couple.id}`, role === "owner" ? { adoptCurrent: true, clearSource: true } : {});
-    protectEmptyRemote = role === "owner";
-    hydrateDirtyDates();
-    app.onRoleChange(role);
-    renderCouple();
-    const synced = await initialSync({
-      legacyPending: Boolean(canAdoptLegacy && legacyMeta.pending),
-      migratedLegacy: Boolean(canAdoptLegacy && userScopeResult?.adopted)
-    });
-    if (canAdoptLegacy && synced) localStorage.removeItem(LEGACY_META_KEY);
-    await pullPartnerResponses();
-    await subscribe();
+      const synced = await initialSync({
+        legacyPending: Boolean(canAdoptLegacy && legacyMeta.pending),
+        migratedLegacy: Boolean(canAdoptLegacy && userScopeResult?.adopted)
+      });
+      if (canAdoptLegacy && synced) localStorage.removeItem(LEGACY_META_KEY);
+      await pullPartnerResponses();
+      await subscribe();
+    } catch (error) {
+      setError(error);
+      ui.retry.hidden = !session;
+      if (couple) {
+        setStatus("连接失败，正在显示上次同步内容", "error");
+        renderCouple();
+      } else setStatus("空间加载失败，本地数据未删除，请重新连接", "error");
+      scheduleSessionRetry();
+    } finally { contextLoading = false; }
   }
 
   function renderCouple() {
     const paired = Boolean(couple);
-    ui.noCouple.hidden = !session || paired;
+    ui.noCouple.hidden = !session || paired || !coupleVerified;
     ui.details.hidden = !paired;
+    ui.retry.hidden = !session || (coupleVerified && navigator.onLine);
     ui.inviteCard.hidden = role !== "owner" || Boolean(couple?.partner_id);
     if (!session) return;
-    ui.role.textContent = role === "owner" ? "记录者，可编辑全部数据" : role === "partner" ? "伴侣，只读查看全部记录" : "尚未加入伴侣空间";
+    ui.role.textContent = role === "owner" ? `记录者，可编辑全部数据${coupleVerified ? "" : "（离线）"}` : role === "partner" ? `伴侣，只读查看全部记录${coupleVerified ? "" : "（离线）"}` : "尚未加入伴侣空间";
     if (!paired) return;
     ui.inviteCode.textContent = couple.invite_code || "";
     ui.inviteExpiry.textContent = couple.invite_expires_at ? `${formatDate(couple.invite_expires_at)} 前有效` : "";
@@ -250,38 +377,52 @@
 
   async function createCouple() {
     clearError();
+    ui.create.disabled = true; ui.join.disabled = true;
     const inviteCode = randomCode();
     const expires = new Date(Date.now() + 7 * 86400000).toISOString();
-    const { data, error } = await client.from("couples").insert({ owner_id: session.user.id, invite_code: inviteCode, invite_expires_at: expires }).select().single();
-    if (error) { setError(error); return; }
+    let result;
+    try { result = await withTimeout(client.from("couples").insert({ owner_id: session.user.id, invite_code: inviteCode, invite_expires_at: expires }).select().single(), 12000, "create couple"); }
+    catch (error) { setError(error); ui.create.disabled = false; ui.join.disabled = false; return; }
+    const { data, error } = result;
+    if (error) { setError(error); ui.create.disabled = false; ui.join.disabled = false; return; }
     resetSyncContext();
     couple = data;
     role = "owner";
+    coupleVerified = true;
     await app.switchStorageScope(`couple:${couple.id}`, { adoptCurrent: true, clearSource: true });
     markDirty(Object.keys(app.getSnapshot().records));
     app.onRoleChange(role);
+    writeCachedCouple();
     renderCouple();
     await syncNow(true);
     await pullPartnerResponses();
     await subscribe();
+    ui.create.disabled = false; ui.join.disabled = false;
   }
 
   async function joinCouple() {
     clearError();
     const code = ui.joinCode.value.trim().toUpperCase();
     if (!/^[A-Z2-9]{8}$/.test(code)) { ui.error.textContent = "请输入 8 位邀请码。"; return; }
-    const { data, error } = await client.rpc("join_couple", { supplied_code: code });
-    if (error) { setError(error); return; }
+    ui.create.disabled = true; ui.join.disabled = true;
+    let result;
+    try { result = await withTimeout(client.rpc("join_couple", { supplied_code: code }), 12000, "join couple"); }
+    catch (error) { setError(error); ui.create.disabled = false; ui.join.disabled = false; return; }
+    const { data, error } = result;
+    if (error) { setError(error); ui.create.disabled = false; ui.join.disabled = false; return; }
     resetSyncContext();
     couple = data;
     role = "partner";
+    coupleVerified = true;
     await app.switchStorageScope(`couple:${couple.id}`);
     app.onRoleChange(role);
+    writeCachedCouple();
     renderCouple();
     const synced = await syncNow();
     if (synced) app.notify("已加入伴侣空间");
     await pullPartnerResponses();
     await subscribe();
+    ui.create.disabled = false; ui.join.disabled = false;
   }
 
   function hydrateDirtyDates() {
@@ -323,9 +464,32 @@
     if (role === "owner" && dirtyVersions.size) pushRequested = true;
     pullRequested = true;
     const success = await drainSync();
-    await pullPartnerResponses();
-    if (userInitiated && success) app.notify("同步完成");
-    return success;
+    const responsesSuccess = await pullPartnerResponses();
+    if (userInitiated) app.notify(success && responsesSuccess ? "同步完成" : success ? "记录已同步，伴侣回应暂未更新" : "同步未完成，将在网络恢复后重试");
+    return success && responsesSuccess;
+  }
+
+  async function recoverConnectivity() {
+    if (!navigator.onLine) {
+      setStatus(couple ? "当前离线，显示上次同步内容" : "当前离线", "error");
+      if (session) ui.retry.hidden = false;
+      return;
+    }
+    if (authRecoveryNeeded) {
+      try {
+        const { data, error } = await withTimeout(client.auth.getSession(), 10000, "session");
+        if (error) throw error;
+        authRecoveryNeeded = false;
+        await applySession(data?.session || null, { force: true });
+      } catch (error) { setError(error); setStatus("无法恢复登录，请重新连接", "error"); }
+      return;
+    }
+    if (session && (!coupleVerified || !couple)) {
+      await applySession(session, { force: true });
+      return;
+    }
+    retryPendingSync();
+    if (couple && !channelConnected) subscribe();
   }
 
   function retryPendingSync() {
@@ -351,14 +515,13 @@
   }
 
   function scheduleSessionRetry() {
-    if (!session || retryTimer) return;
+    if (!session || sessionRetryTimer) return;
     const retrySession = session;
-    const delay = RETRY_DELAYS[Math.min(retryAttempt, RETRY_DELAYS.length - 1)];
-    retryAttempt += 1;
-    retryTimer = window.setTimeout(() => {
-      retryTimer = null;
-      session = null;
-      applySession(retrySession);
+    const delay = RETRY_DELAYS[Math.min(sessionRetryAttempt, RETRY_DELAYS.length - 1)];
+    sessionRetryAttempt += 1;
+    sessionRetryTimer = window.setTimeout(() => {
+      sessionRetryTimer = null;
+      applySession(retrySession, { force: true });
     }, delay);
   }
 
@@ -383,7 +546,7 @@
           if (activeContext !== contextVersion) break;
           success = false;
           setError(error);
-          setStatus(operation === "push" ? "等待网络后重试" : "无法读取云端记录，稍后重试", "error");
+          setStatus(operation === "push" ? `${dirtyVersions.size || 1} 条记录等待网络后同步` : "无法读取云端记录，稍后重试", "error");
           scheduleRetry(operation);
           break;
         }
@@ -587,38 +750,58 @@
     await removeChannel();
     if (!couple) return;
     const activeContext = contextVersion;
+    const activeSubscription = ++subscriptionVersion;
     channel = client.channel(`records:${couple.id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "daily_records", filter: `couple_id=eq.${couple.id}` }, () => {
-        if (activeContext !== contextVersion) return;
+        if (activeContext !== contextVersion || activeSubscription !== subscriptionVersion) return;
         pullRequested = true;
         window.setTimeout(drainSync, 120);
       });
     if (responsesAvailable) {
       channel.on("postgres_changes", { event: "*", schema: "public", table: "partner_responses", filter: `couple_id=eq.${couple.id}` }, () => {
-        if (activeContext === contextVersion) window.setTimeout(pullPartnerResponses, 120);
+        if (activeContext === contextVersion && activeSubscription === subscriptionVersion) window.setTimeout(pullPartnerResponses, 120);
       }).on("postgres_changes", { event: "UPDATE", schema: "public", table: "couples", filter: `id=eq.${couple.id}` }, payload => {
-        if (activeContext !== contextVersion) return;
+        if (activeContext !== contextVersion || activeSubscription !== subscriptionVersion) return;
         couple = { ...couple, ...(payload.new || {}) };
+        writeCachedCouple();
         notifyResponseContext();
       });
     }
     channel.subscribe(status => {
-        if (activeContext !== contextVersion) return;
+        if (activeContext !== contextVersion || activeSubscription !== subscriptionVersion) return;
         if (status === "SUBSCRIBED") {
+          channelConnected = true;
+          reconnectAttempt = 0;
+          clearTimeout(reconnectTimer); reconnectTimer = null;
           pullRequested = true;
           drainSync();
           pullPartnerResponses();
         }
         if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) {
+          channelConnected = false;
           setStatus("实时连接中断，正在重连", "error");
-          scheduleRetry("pull");
+          scheduleRealtimeReconnect();
         }
       });
   }
 
   async function removeChannel() {
+    subscriptionVersion += 1;
+    channelConnected = false;
     if (channel && client) await client.removeChannel(channel);
     channel = null;
+  }
+
+  function scheduleRealtimeReconnect() {
+    if (!couple || reconnectTimer || !navigator.onLine) return;
+    const delay = RETRY_DELAYS[Math.min(reconnectAttempt, RETRY_DELAYS.length - 1)];
+    reconnectAttempt += 1;
+    reconnectTimer = window.setTimeout(async () => {
+      reconnectTimer = null;
+      if (!couple || !navigator.onLine) return;
+      await subscribe();
+      retryPendingSync();
+    }, delay);
   }
 
   async function copyInvite() {
@@ -638,6 +821,7 @@
   }
   function friendlyError(error) {
     const message = String(error?.message || error || "");
+    if (error?.code === "NETWORK_TIMEOUT" || /timed out|fetch|network|offline/i.test(message)) return "网络连接超时，请检查网络后重试。";
     if (/expired/i.test(message)) return "邀请码已过期，请让记录者重新创建。";
     if (/already|unique/i.test(message)) return "这个账号已经加入了其他伴侣空间。";
     if (/invalid invite/i.test(message)) return "邀请码无效、已过期或已经被使用。";
